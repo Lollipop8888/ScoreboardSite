@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Plus, Trophy, Users, Calendar, GitBranch, Share2, Trash2, Play } from 'lucide-react'
+import { Plus, Trophy, Users, Calendar, GitBranch, Share2, Trash2, Play, Upload, X, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -34,11 +34,13 @@ export default function LeagueDetailPage() {
   
   // Dialog states
   const [teamDialogOpen, setTeamDialogOpen] = useState(false)
+  const [teamEditDialogOpen, setTeamEditDialogOpen] = useState(false)
+  const [editingTeam, setEditingTeam] = useState(null)
   const [gameDialogOpen, setGameDialogOpen] = useState(false)
   const [bracketDialogOpen, setBracketDialogOpen] = useState(false)
   
   // Form states
-  const [teamForm, setTeamForm] = useState({ name: '', abbreviation: '', color: '#3B82F6' })
+  const [teamForm, setTeamForm] = useState({ name: '', abbreviation: '', color: '#3B82F6', color2: '', color3: '' })
   const [gameForm, setGameForm] = useState({ home_team_id: '', away_team_id: '' })
   const [bracketForm, setBracketForm] = useState({ name: '', num_teams: '4', team_ids: [] })
 
@@ -48,18 +50,29 @@ export default function LeagueDetailPage() {
 
   async function loadData() {
     try {
-      const [leagueData, standingsData, gamesData, bracketsData] = await Promise.all([
-        leagueApi.get(leagueId),
-        leagueApi.getStandings(leagueId),
-        leagueApi.getGames(leagueId),
-        leagueApi.getBrackets(leagueId),
-      ])
+      // First get the league - this is required
+      const leagueData = await leagueApi.get(leagueId)
       setLeague(leagueData)
-      setStandings(standingsData)
-      setGames(gamesData)
-      setBrackets(bracketsData)
+      
+      // Then get the rest - these can fail without breaking the page
+      try {
+        const [standingsData, gamesData, bracketsData] = await Promise.all([
+          leagueApi.getStandings(leagueId),
+          leagueApi.getGames(leagueId),
+          leagueApi.getBrackets(leagueId),
+        ])
+        setStandings(standingsData || [])
+        setGames(gamesData || [])
+        setBrackets(bracketsData || [])
+      } catch (err) {
+        console.error('Failed to load additional data:', err)
+        setStandings([])
+        setGames([])
+        setBrackets([])
+      }
     } catch (error) {
-      console.error('Failed to load league data:', error)
+      console.error('Failed to load league:', error)
+      setLeague(null)
     } finally {
       setLoading(false)
     }
@@ -68,9 +81,13 @@ export default function LeagueDetailPage() {
   async function handleAddTeam(e) {
     e.preventDefault()
     try {
-      await teamApi.create({ ...teamForm, league_id: leagueId })
+      // Filter out empty color2/color3
+      const teamData = { ...teamForm, league_id: leagueId }
+      if (!teamData.color2) delete teamData.color2
+      if (!teamData.color3) delete teamData.color3
+      await teamApi.create(teamData)
       setTeamDialogOpen(false)
-      setTeamForm({ name: '', abbreviation: '', color: '#3B82F6' })
+      setTeamForm({ name: '', abbreviation: '', color: '#3B82F6', color2: '', color3: '' })
       loadData()
     } catch (error) {
       console.error('Failed to add team:', error)
@@ -78,12 +95,60 @@ export default function LeagueDetailPage() {
   }
 
   async function handleDeleteTeam(teamId) {
-    if (!confirm('Are you sure you want to delete this team?')) return
+    if (!confirm('Are you sure you want to delete this team? This will also delete all games involving this team.')) return
     try {
       await teamApi.delete(teamId)
       loadData()
     } catch (error) {
       console.error('Failed to delete team:', error)
+    }
+  }
+
+  function openTeamEditDialog(team) {
+    setEditingTeam(team)
+    setTeamForm({
+      name: team.name,
+      abbreviation: team.abbreviation || '',
+      color: team.color || '#3B82F6',
+      color2: team.color2 || '',
+      color3: team.color3 || '',
+    })
+    setTeamEditDialogOpen(true)
+  }
+
+  async function handleEditTeam(e) {
+    e.preventDefault()
+    try {
+      const teamData = { ...teamForm }
+      if (!teamData.color2) delete teamData.color2
+      if (!teamData.color3) delete teamData.color3
+      await teamApi.update(editingTeam.id, teamData)
+      setTeamEditDialogOpen(false)
+      setEditingTeam(null)
+      setTeamForm({ name: '', abbreviation: '', color: '#3B82F6', color2: '', color3: '' })
+      loadData()
+    } catch (error) {
+      console.error('Failed to update team:', error)
+    }
+  }
+
+  async function handleLogoUpload(teamId, file) {
+    if (!file) return
+    try {
+      await teamApi.uploadLogo(teamId, file)
+      loadData()
+    } catch (error) {
+      console.error('Failed to upload logo:', error)
+      alert('Failed to upload logo: ' + error.message)
+    }
+  }
+
+  async function handleLogoDelete(teamId) {
+    try {
+      await teamApi.deleteLogo(teamId)
+      loadData()
+    } catch (error) {
+      console.error('Failed to delete logo:', error)
     }
   }
 
@@ -260,20 +325,61 @@ export default function LeagueDetailPage() {
                         />
                       </div>
                       <div className="grid gap-2">
-                        <Label htmlFor="color">Team Color</Label>
+                        <Label htmlFor="color">Primary Color</Label>
                         <div className="flex gap-2">
                           <Input
                             id="color"
                             type="color"
                             value={teamForm.color}
                             onChange={(e) => setTeamForm({ ...teamForm, color: e.target.value })}
-                            className="h-10 w-20 p-1"
+                            className="h-10 w-16 p-1"
                           />
                           <Input
                             value={teamForm.color}
                             onChange={(e) => setTeamForm({ ...teamForm, color: e.target.value })}
                             placeholder="#3B82F6"
+                            className="flex-1"
                           />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-2">
+                          <Label htmlFor="color2">Secondary Color <span className="text-red-500">*</span></Label>
+                          <div className="flex gap-2">
+                            <Input
+                              id="color2"
+                              type="color"
+                              value={teamForm.color2 || '#FFFFFF'}
+                              onChange={(e) => setTeamForm({ ...teamForm, color2: e.target.value })}
+                              className="h-10 w-12 p-1"
+                              required
+                            />
+                            <Input
+                              value={teamForm.color2}
+                              onChange={(e) => setTeamForm({ ...teamForm, color2: e.target.value })}
+                              placeholder="#FFFFFF"
+                              className="flex-1"
+                              required
+                            />
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="color3">Tertiary Color</Label>
+                          <div className="flex gap-2">
+                            <Input
+                              id="color3"
+                              type="color"
+                              value={teamForm.color3 || '#000000'}
+                              onChange={(e) => setTeamForm({ ...teamForm, color3: e.target.value })}
+                              className="h-10 w-12 p-1"
+                            />
+                            <Input
+                              value={teamForm.color3}
+                              onChange={(e) => setTeamForm({ ...teamForm, color3: e.target.value })}
+                              placeholder="Optional"
+                              className="flex-1"
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -292,34 +398,196 @@ export default function LeagueDetailPage() {
                   {league.teams?.map((team) => (
                     <div
                       key={team.id}
-                      className="flex items-center justify-between rounded-lg border p-4"
+                      className="rounded-lg border p-4"
                     >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="h-8 w-8 rounded-full"
-                          style={{ backgroundColor: team.color }}
-                        />
-                        <div>
-                          <p className="font-medium">{team.name}</p>
-                          {team.abbreviation && (
-                            <p className="text-sm text-slate-500">{team.abbreviation}</p>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          {team.logo_url ? (
+                            <img 
+                              src={team.logo_url} 
+                              alt={team.name}
+                              className="h-10 w-10 rounded-full object-cover border-2"
+                              style={{ borderColor: team.color }}
+                            />
+                          ) : (
+                            <div
+                              className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold"
+                              style={{ backgroundColor: team.color }}
+                            >
+                              {team.abbreviation?.substring(0, 2) || team.name.substring(0, 2).toUpperCase()}
+                            </div>
                           )}
+                          <div>
+                            <p className="font-medium">{team.name}</p>
+                            {team.abbreviation && (
+                              <p className="text-sm text-slate-500">{team.abbreviation}</p>
+                            )}
+                            {/* Team colors display */}
+                            <div className="flex gap-1 mt-1">
+                              <div className="h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: team.color }} title="Primary" />
+                              {team.color2 && <div className="h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: team.color2 }} title="Secondary" />}
+                              {team.color3 && <div className="h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: team.color3 }} title="Tertiary" />}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openTeamEditDialog(team)}
+                            className="text-slate-400 hover:text-blue-600 h-8 w-8"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteTeam(team.id)}
+                            className="text-slate-400 hover:text-red-600 h-8 w-8"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         </div>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDeleteTeam(team.id)}
-                        className="text-slate-400 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {/* Logo Upload Section */}
+                      <div className="border-t pt-3">
+                        {team.logo_url ? (
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-slate-500">Logo uploaded</span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-red-600 border-red-300 h-7 text-xs"
+                              onClick={() => handleLogoDelete(team.id)}
+                            >
+                              <X className="h-3 w-3 mr-1" />
+                              Remove
+                            </Button>
+                          </div>
+                        ) : (
+                          <div>
+                            <input
+                              type="file"
+                              id={`logo-upload-${team.id}`}
+                              className="hidden"
+                              accept="image/*"
+                              onChange={(e) => handleLogoUpload(team.id, e.target.files[0])}
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full h-7 text-xs"
+                              onClick={() => document.getElementById(`logo-upload-${team.id}`).click()}
+                            >
+                              <Upload className="h-3 w-3 mr-1" />
+                              Upload Logo
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
             </CardContent>
           </Card>
+          
+          {/* Edit Team Dialog */}
+          <Dialog open={teamEditDialogOpen} onOpenChange={setTeamEditDialogOpen}>
+            <DialogContent>
+              <form onSubmit={handleEditTeam}>
+                <DialogHeader>
+                  <DialogTitle>Edit Team</DialogTitle>
+                  <DialogDescription>Update the team details.</DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit-team-name">Team Name</Label>
+                    <Input
+                      id="edit-team-name"
+                      placeholder="e.g., Kansas City Chiefs"
+                      value={teamForm.name}
+                      onChange={(e) => setTeamForm({ ...teamForm, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit-abbreviation">Abbreviation</Label>
+                    <Input
+                      id="edit-abbreviation"
+                      placeholder="e.g., KC"
+                      value={teamForm.abbreviation}
+                      onChange={(e) => setTeamForm({ ...teamForm, abbreviation: e.target.value })}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit-color">Primary Color</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="edit-color"
+                        type="color"
+                        value={teamForm.color}
+                        onChange={(e) => setTeamForm({ ...teamForm, color: e.target.value })}
+                        className="h-10 w-16 p-1"
+                      />
+                      <Input
+                        value={teamForm.color}
+                        onChange={(e) => setTeamForm({ ...teamForm, color: e.target.value })}
+                        placeholder="#3B82F6"
+                        className="flex-1"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit-color2">Secondary Color <span className="text-red-500">*</span></Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="edit-color2"
+                          type="color"
+                          value={teamForm.color2 || '#FFFFFF'}
+                          onChange={(e) => setTeamForm({ ...teamForm, color2: e.target.value })}
+                          className="h-10 w-12 p-1"
+                          required
+                        />
+                        <Input
+                          value={teamForm.color2}
+                          onChange={(e) => setTeamForm({ ...teamForm, color2: e.target.value })}
+                          placeholder="#FFFFFF"
+                          className="flex-1"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit-color3">Tertiary Color</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="edit-color3"
+                          type="color"
+                          value={teamForm.color3 || '#000000'}
+                          onChange={(e) => setTeamForm({ ...teamForm, color3: e.target.value })}
+                          className="h-10 w-12 p-1"
+                        />
+                        <Input
+                          value={teamForm.color3}
+                          onChange={(e) => setTeamForm({ ...teamForm, color3: e.target.value })}
+                          placeholder="Optional"
+                          className="flex-1"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setTeamEditDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit">Save Changes</Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         {/* Games Tab */}

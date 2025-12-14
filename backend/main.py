@@ -1,16 +1,24 @@
 import json
 import math
+import os
+import uuid
 from datetime import datetime
 from typing import List, Dict, Set
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, joinedload
 
 import models
 import schemas
 from database import engine, get_db, Base
+
+
+# Create uploads directory for team logos
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 @asynccontextmanager
@@ -20,6 +28,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ScoreKeeper API", version="1.0.0", lifespan=lifespan)
+
+# Serve uploaded files statically
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -99,14 +110,37 @@ def update_league(league_id: str, league: schemas.LeagueUpdate, db: Session = De
     return db_league
 
 
-@app.delete("/api/leagues/{league_id}")
+@app.delete("/api/leagues/{league_id}", status_code=204)
 def delete_league(league_id: str, db: Session = Depends(get_db)):
     db_league = db.query(models.League).filter(models.League.id == league_id).first()
     if not db_league:
         raise HTTPException(status_code=404, detail="League not found")
-    db.delete(db_league)
-    db.commit()
-    return {"message": "League deleted"}
+    
+    try:
+        # Get bracket IDs first
+        bracket_ids = [b.id for b in db.query(models.Bracket).filter(models.Bracket.league_id == league_id).all()]
+        
+        # Delete bracket matches
+        if bracket_ids:
+            db.query(models.BracketMatch).filter(models.BracketMatch.bracket_id.in_(bracket_ids)).delete(synchronize_session=False)
+        
+        # Delete brackets
+        db.query(models.Bracket).filter(models.Bracket.league_id == league_id).delete(synchronize_session=False)
+        
+        # Delete games
+        db.query(models.Game).filter(models.Game.league_id == league_id).delete(synchronize_session=False)
+        
+        # Delete teams
+        db.query(models.Team).filter(models.Team.league_id == league_id).delete(synchronize_session=False)
+        
+        # Delete the league
+        db.query(models.League).filter(models.League.id == league_id).delete(synchronize_session=False)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    return None
 
 
 # ============ Team Endpoints ============
@@ -148,14 +182,78 @@ def update_team(team_id: str, team: schemas.TeamUpdate, db: Session = Depends(ge
     return db_team
 
 
-@app.delete("/api/teams/{team_id}")
+@app.delete("/api/teams/{team_id}", status_code=204)
 def delete_team(team_id: str, db: Session = Depends(get_db)):
     db_team = db.query(models.Team).filter(models.Team.id == team_id).first()
     if not db_team:
         raise HTTPException(status_code=404, detail="Team not found")
+    
+    # Delete games involving this team
+    db.query(models.Game).filter(
+        (models.Game.home_team_id == team_id) | (models.Game.away_team_id == team_id)
+    ).delete(synchronize_session=False)
+    
+    # Clear team references in bracket matches (set to NULL)
+    db.query(models.BracketMatch).filter(models.BracketMatch.team1_id == team_id).update({"team1_id": None})
+    db.query(models.BracketMatch).filter(models.BracketMatch.team2_id == team_id).update({"team2_id": None})
+    db.query(models.BracketMatch).filter(models.BracketMatch.winner_id == team_id).update({"winner_id": None})
+    
     db.delete(db_team)
     db.commit()
-    return {"message": "Team deleted"}
+    return None
+
+
+@app.post("/api/teams/{team_id}/logo")
+async def upload_team_logo(team_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    db_team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not db_team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Allowed: JPEG, PNG, GIF, WebP, SVG")
+    
+    # Generate unique filename
+    file_ext = file.filename.split(".")[-1] if "." in file.filename else "png"
+    filename = f"{team_id}_{uuid.uuid4().hex[:8]}.{file_ext}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    
+    # Delete old logo if exists
+    if db_team.logo_url:
+        old_filename = db_team.logo_url.split("/")[-1]
+        old_filepath = os.path.join(UPLOAD_DIR, old_filename)
+        if os.path.exists(old_filepath):
+            os.remove(old_filepath)
+    
+    # Save new file
+    with open(filepath, "wb") as f:
+        content = await file.read()
+        f.write(content)
+    
+    # Update team with logo URL
+    db_team.logo_url = f"/uploads/{filename}"
+    db.commit()
+    db.refresh(db_team)
+    
+    return {"logo_url": db_team.logo_url}
+
+
+@app.delete("/api/teams/{team_id}/logo", status_code=204)
+def delete_team_logo(team_id: str, db: Session = Depends(get_db)):
+    db_team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not db_team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    if db_team.logo_url:
+        filename = db_team.logo_url.split("/")[-1]
+        filepath = os.path.join(UPLOAD_DIR, filename)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        db_team.logo_url = None
+        db.commit()
+    
+    return None
 
 
 # ============ Game Endpoints ============
@@ -262,14 +360,14 @@ async def update_game(game_id: str, game_update: schemas.GameUpdate, db: Session
     return game
 
 
-@app.delete("/api/games/{game_id}")
+@app.delete("/api/games/{game_id}", status_code=204)
 def delete_game(game_id: str, db: Session = Depends(get_db)):
     db_game = db.query(models.Game).filter(models.Game.id == game_id).first()
     if not db_game:
         raise HTTPException(status_code=404, detail="Game not found")
     db.delete(db_game)
     db.commit()
-    return {"message": "Game deleted"}
+    return None
 
 
 # ============ Bracket Endpoints ============
@@ -408,14 +506,16 @@ async def update_bracket_match(match_id: str, match_update: schemas.BracketMatch
     return match
 
 
-@app.delete("/api/brackets/{bracket_id}")
+@app.delete("/api/brackets/{bracket_id}", status_code=204)
 def delete_bracket(bracket_id: str, db: Session = Depends(get_db)):
     db_bracket = db.query(models.Bracket).filter(models.Bracket.id == bracket_id).first()
     if not db_bracket:
         raise HTTPException(status_code=404, detail="Bracket not found")
+    # Delete bracket matches first
+    db.query(models.BracketMatch).filter(models.BracketMatch.bracket_id == bracket_id).delete()
     db.delete(db_bracket)
     db.commit()
-    return {"message": "Bracket deleted"}
+    return None
 
 
 # ============ Scoreboard Endpoints ============
@@ -532,7 +632,7 @@ async def update_scoreboard_player(player_id: str, player: schemas.ScoreboardPla
     return db_player
 
 
-@app.delete("/api/scoreboards/players/{player_id}")
+@app.delete("/api/scoreboards/players/{player_id}", status_code=204)
 async def delete_scoreboard_player(player_id: str, db: Session = Depends(get_db)):
     db_player = db.query(models.ScoreboardPlayer).filter(models.ScoreboardPlayer.id == player_id).first()
     if not db_player:
@@ -544,22 +644,25 @@ async def delete_scoreboard_player(player_id: str, db: Session = Depends(get_db)
     db.commit()
     
     # Broadcast update
-    await manager.broadcast(f"scoreboard:{scoreboard.share_code}", {
-        "type": "player_removed",
-        "data": {"id": player_id}
-    })
+    if scoreboard:
+        await manager.broadcast(f"scoreboard:{scoreboard.share_code}", {
+            "type": "player_removed",
+            "data": {"id": player_id}
+        })
     
-    return {"message": "Player deleted"}
+    return None
 
 
-@app.delete("/api/scoreboards/{scoreboard_id}")
+@app.delete("/api/scoreboards/{scoreboard_id}", status_code=204)
 def delete_scoreboard(scoreboard_id: str, db: Session = Depends(get_db)):
     db_scoreboard = db.query(models.Scoreboard).filter(models.Scoreboard.id == scoreboard_id).first()
     if not db_scoreboard:
         raise HTTPException(status_code=404, detail="Scoreboard not found")
+    # Delete players first
+    db.query(models.ScoreboardPlayer).filter(models.ScoreboardPlayer.scoreboard_id == scoreboard_id).delete()
     db.delete(db_scoreboard)
     db.commit()
-    return {"message": "Scoreboard deleted"}
+    return None
 
 
 # ============ WebSocket Endpoints ============

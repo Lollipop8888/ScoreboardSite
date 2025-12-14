@@ -34,6 +34,8 @@ class TeamBase(BaseModel):
     name: str
     abbreviation: Optional[str] = None
     color: Optional[str] = "#3B82F6"
+    color2: Optional[str] = None
+    color3: Optional[str] = None
     logo_url: Optional[str] = None
 
 
@@ -45,6 +47,8 @@ class TeamUpdate(BaseModel):
     name: Optional[str] = None
     abbreviation: Optional[str] = None
     color: Optional[str] = None
+    color2: Optional[str] = None
+    color3: Optional[str] = None
     logo_url: Optional[str] = None
     wins: Optional[int] = None
     losses: Optional[int] = None

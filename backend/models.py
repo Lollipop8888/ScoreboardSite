@@ -32,10 +32,12 @@ class Team(Base):
     __tablename__ = "teams"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    league_id = Column(String, ForeignKey("leagues.id"), nullable=False)
+    league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     abbreviation = Column(String(10))
-    color = Column(String(7), default="#3B82F6")  # Hex color
+    color = Column(String(7), default="#3B82F6")  # Primary hex color
+    color2 = Column(String(7))  # Secondary hex color (optional)
+    color3 = Column(String(7))  # Tertiary hex color (optional)
     logo_url = Column(String(500))
     wins = Column(Integer, default=0)
     losses = Column(Integer, default=0)
@@ -51,9 +53,9 @@ class Game(Base):
     __tablename__ = "games"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    league_id = Column(String, ForeignKey("leagues.id"), nullable=False)
-    home_team_id = Column(String, ForeignKey("teams.id"), nullable=False)
-    away_team_id = Column(String, ForeignKey("teams.id"), nullable=False)
+    league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
+    home_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    away_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
     home_score = Column(Integer, default=0)
     away_score = Column(Integer, default=0)
     status = Column(String(20), default="scheduled")  # scheduled, live, final
@@ -75,7 +77,7 @@ class Bracket(Base):
     __tablename__ = "brackets"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    league_id = Column(String, ForeignKey("leagues.id"), nullable=False)
+    league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     bracket_type = Column(String(20), default="single_elimination")  # single_elimination, double_elimination
     num_teams = Column(Integer, nullable=False)
@@ -91,16 +93,16 @@ class BracketMatch(Base):
     __tablename__ = "bracket_matches"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    bracket_id = Column(String, ForeignKey("brackets.id"), nullable=False)
+    bracket_id = Column(String, ForeignKey("brackets.id", ondelete="CASCADE"), nullable=False)
     round_number = Column(Integer, nullable=False)
     match_number = Column(Integer, nullable=False)
-    team1_id = Column(String, ForeignKey("teams.id"))
-    team2_id = Column(String, ForeignKey("teams.id"))
+    team1_id = Column(String, ForeignKey("teams.id", ondelete="SET NULL"))
+    team2_id = Column(String, ForeignKey("teams.id", ondelete="SET NULL"))
     team1_score = Column(Integer, default=0)
     team2_score = Column(Integer, default=0)
-    winner_id = Column(String, ForeignKey("teams.id"))
+    winner_id = Column(String, ForeignKey("teams.id", ondelete="SET NULL"))
     status = Column(String(20), default="pending")  # pending, live, completed
-    next_match_id = Column(String, ForeignKey("bracket_matches.id"))
+    next_match_id = Column(String, ForeignKey("bracket_matches.id", ondelete="SET NULL"))
     created_at = Column(DateTime, default=datetime.utcnow)
 
     bracket = relationship("Bracket", back_populates="matches")
