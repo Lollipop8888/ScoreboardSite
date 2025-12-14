@@ -144,8 +144,12 @@ export function AnimatedScore({
           className
         )}
         style={{ 
-          color: color || undefined,
-          textShadow: isAnimating && colors ? `0 0 20px ${colors.glow}` : undefined
+          color: color || '#ffffff',
+          textShadow: isAnimating && colors 
+            ? `0 0 20px ${colors.glow}, 0 0 40px ${colors.glow}60` 
+            : `0 0 8px rgba(255,255,255,0.9), 0 0 16px rgba(255,255,255,0.6), 0 0 24px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.9)`,
+          WebkitTextStroke: '2px rgba(255,255,255,0.8)',
+          paintOrder: 'stroke fill'
         }}
       >
         {score}

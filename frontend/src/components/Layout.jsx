@@ -1,8 +1,17 @@
-import { Link, Outlet, useLocation } from 'react-router-dom'
-import { Trophy, LayoutGrid, Home, Target, Moon, Sun } from 'lucide-react'
+import { useState } from 'react'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Trophy, LayoutGrid, Home, Target, Moon, Sun, LogIn, LogOut, User, Share2, Copy, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/theme'
+import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
@@ -12,7 +21,19 @@ const navItems = [
 
 export default function Layout() {
   const location = useLocation()
+  const navigate = useNavigate()
   const { theme, toggleTheme } = useTheme()
+  const { user, logout, loading } = useAuth()
+  const [copied, setCopied] = useState(false)
+
+  const copyProfileLink = () => {
+    if (user) {
+      const profileUrl = `${window.location.origin}/u/${user.username}`
+      navigator.clipboard.writeText(profileUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-green-50/30 dark:from-slate-950 dark:to-slate-900">
@@ -68,6 +89,56 @@ export default function Layout() {
                   <Sun className="h-5 w-5 text-yellow-400" />
                 )}
               </Button>
+
+              {/* Auth Buttons */}
+              {!loading && (
+                <>
+                  {user ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="ml-2 gap-1">
+                          <User className="h-4 w-4" />
+                          <span className="hidden sm:inline">{user.username}</span>
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem asChild>
+                          <Link to={`/u/${user.username}`} className="cursor-pointer">
+                            <User className="h-4 w-4 mr-2" />
+                            My Profile
+                          </Link>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={copyProfileLink}>
+                          {copied ? (
+                            <Check className="h-4 w-4 mr-2 text-green-600" />
+                          ) : (
+                            <Share2 className="h-4 w-4 mr-2" />
+                          )}
+                          {copied ? 'Copied!' : 'Share Profile Link'}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem 
+                          onClick={() => {
+                            logout()
+                            navigate('/')
+                          }}
+                          className="text-red-600 focus:text-red-600"
+                        >
+                          <LogOut className="h-4 w-4 mr-2" />
+                          Logout
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : (
+                    <Link to="/login">
+                      <Button variant="default" size="sm" className="ml-2 gap-1">
+                        <LogIn className="h-4 w-4" />
+                        <span className="hidden sm:inline">Sign In</span>
+                      </Button>
+                    </Link>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>

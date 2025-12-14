@@ -1,50 +1,134 @@
-import { Link } from 'react-router-dom'
-import { Trophy, LayoutGrid, GitBranch, Share2, Zap, Users, Timer, Target } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Trophy, LayoutGrid, GitBranch, Share2, Zap, Users, Timer, Target, Search, ArrowRight, Play, Monitor, Smartphone, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { gameApi, bracketApi, scoreboardApi, leagueApi } from '@/lib/api'
 
 const features = [
   {
     icon: Trophy,
-    title: 'League Standings',
-    description: 'Track wins, losses, and rankings for your entire football season with automatic standings updates.',
+    title: 'League Management',
+    description: 'Full season tracking with standings, conferences, divisions, and automatic win/loss records.',
   },
   {
     icon: GitBranch,
     title: 'Playoff Brackets',
-    description: 'Create single-elimination tournament brackets. Perfect for playoff season.',
+    description: 'Single or double-sided tournament brackets with BYE support and playoff picture tracking.',
   },
   {
     icon: LayoutGrid,
-    title: 'Live Game Scoring',
-    description: 'Score games in real-time with TD, FG, Safety, and PAT quick buttons.',
+    title: 'Live Scoring',
+    description: 'One-tap scoring with TD, FG, Safety, PAT, and 2PT buttons. Perfect for game day.',
   },
   {
-    icon: Timer,
-    title: 'Quarter Tracking',
-    description: 'Track game progress with quarters, halftime, and overtime support.',
+    icon: Monitor,
+    title: 'Stream Friendly',
+    description: 'Clean display pages perfect for broadcasts and presentations.',
   },
   {
     icon: Share2,
-    title: 'Share Anywhere',
-    description: 'Share any scoreboard with a simple link. Perfect for streaming to OBS.',
+    title: 'Instant Sharing',
+    description: 'Every game, bracket, and scoreboard gets a unique code. Share with anyone, anywhere.',
   },
   {
     icon: Zap,
-    title: 'Real-time Updates',
-    description: 'WebSocket-powered live updates so fans never miss a touchdown.',
+    title: 'Real-time Sync',
+    description: 'WebSocket-powered updates. Scores update live across all connected devices.',
   },
 ]
 
-const scoringOptions = [
-  { label: 'Touchdown', points: 6, color: 'bg-green-600' },
-  { label: 'PAT', points: 1, color: 'bg-blue-600' },
-  { label: '2-PT Conv', points: 2, color: 'bg-purple-600' },
-  { label: 'Field Goal', points: 3, color: 'bg-yellow-600' },
-  { label: 'Safety', points: 2, color: 'bg-red-600' },
+const howItWorks = [
+  { step: '1', title: 'Create', description: 'Set up your league with teams, or start a quick game' },
+  { step: '2', title: 'Score', description: 'Use quick-tap buttons to track every play' },
+  { step: '3', title: 'Share', description: 'Send the code to fans or add to your stream' },
 ]
 
+
 export default function HomePage() {
+  const navigate = useNavigate()
+  const [shareCode, setShareCode] = useState('')
+  const [joinError, setJoinError] = useState('')
+  const [isJoining, setIsJoining] = useState(false)
+  const [stats, setStats] = useState({ leagues: 0, games: 0 })
+  const [demoScore, setDemoScore] = useState({ home: 24, away: 21 })
+  const [demoQuarter, setDemoQuarter] = useState('Q3')
+
+  // Animate demo scoreboard - reset when scores get too high
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDemoScore(prev => {
+        // Reset if scores get too high
+        if (prev.home > 50 || prev.away > 50) {
+          return { home: 24, away: 21 }
+        }
+        const rand = Math.random()
+        if (rand < 0.25) return { ...prev, home: prev.home + (Math.random() < 0.5 ? 7 : 3) }
+        if (rand < 0.5) return { ...prev, away: prev.away + (Math.random() < 0.5 ? 7 : 3) }
+        return prev
+      })
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Load real stats
+  useEffect(() => {
+    async function loadStats() {
+      try {
+        const leagues = await leagueApi.getAll()
+        setStats({ leagues: leagues?.length || 0, games: leagues?.reduce((acc, l) => acc + (l.games?.length || 0), 0) || 0 })
+      } catch (e) {
+        // Ignore - just show 0
+      }
+    }
+    loadStats()
+  }, [])
+
+  async function handleJoinDisplay(e) {
+    e.preventDefault()
+    if (!shareCode.trim()) return
+    
+    setIsJoining(true)
+    setJoinError('')
+    
+    const code = shareCode.trim().toUpperCase()
+    
+    // Try each type and navigate to share page if found
+    try {
+      const game = await gameApi.getByShareCode(code)
+      if (game) {
+        navigate(`/share/game/${code}`)
+        return
+      }
+    } catch (e) {
+      // Game not found, try next
+    }
+    
+    try {
+      const bracket = await bracketApi.getByShareCode(code)
+      if (bracket) {
+        navigate(`/share/bracket/${code}`)
+        return
+      }
+    } catch (e) {
+      // Bracket not found, try next
+    }
+    
+    try {
+      const scoreboard = await scoreboardApi.getByShareCode(code)
+      if (scoreboard) {
+        navigate(`/share/scoreboard/${code}`)
+        return
+      }
+    } catch (e) {
+      // Scoreboard not found
+    }
+    
+    setJoinError('No display found with that code')
+    setIsJoining(false)
+  }
+
   return (
     <div className="space-y-16">
       {/* Hero Section */}
@@ -74,19 +158,7 @@ export default function HomePage() {
             Real-time updates, easy sharing, and professional-grade tracking.
           </p>
           
-          {/* Scoring preview */}
-          <div className="flex flex-wrap justify-center gap-2 py-4">
-            {scoringOptions.map((opt) => (
-              <div
-                key={opt.label}
-                className={`${opt.color} text-white px-3 py-1.5 rounded-full text-sm font-semibold shadow-md`}
-              >
-                {opt.label} +{opt.points}
-              </div>
-            ))}
-          </div>
-          
-          <div className="flex flex-wrap justify-center gap-4 pt-4">
+          <div className="flex flex-wrap justify-center gap-4 pt-6">
             <Button asChild size="lg" className="gap-2 bg-green-600 hover:bg-green-700">
               <Link to="/leagues">
                 <Trophy className="h-5 w-5" />
@@ -99,6 +171,34 @@ export default function HomePage() {
                 Quick Scoreboard
               </Link>
             </Button>
+          </div>
+
+          {/* Join Display Section */}
+          <div className="mt-8 pt-8 border-t border-slate-200 dark:border-slate-700">
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Have a display code?</p>
+            <form onSubmit={handleJoinDisplay} className="flex items-center justify-center gap-2 max-w-sm mx-auto">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <Input
+                  type="text"
+                  placeholder="Enter share code..."
+                  value={shareCode}
+                  onChange={(e) => {
+                    setShareCode(e.target.value.toUpperCase())
+                    setJoinError('')
+                  }}
+                  className="pl-9 uppercase font-mono tracking-wider"
+                  maxLength={8}
+                />
+              </div>
+              <Button type="submit" disabled={!shareCode.trim() || isJoining} className="gap-1">
+                {isJoining ? 'Joining...' : 'Join'}
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </form>
+            {joinError && (
+              <p className="text-sm text-red-500 mt-2">{joinError}</p>
+            )}
           </div>
         </div>
       </section>
@@ -130,45 +230,93 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* How It Works */}
+      <section className="py-8">
+        <h2 className="mb-8 text-center text-3xl font-bold text-slate-900 dark:text-white">
+          How It Works
+        </h2>
+        <div className="grid md:grid-cols-3 gap-8 max-w-4xl mx-auto">
+          {howItWorks.map((item, index) => (
+            <div key={item.step} className="text-center relative">
+              {index < howItWorks.length - 1 && (
+                <div className="hidden md:block absolute top-8 left-[60%] w-[80%] h-0.5 bg-gradient-to-r from-green-500 to-transparent" />
+              )}
+              <div className="h-16 w-16 mx-auto rounded-full bg-green-600 text-white flex items-center justify-center text-2xl font-bold mb-4 shadow-lg">
+                {item.step}
+              </div>
+              <h3 className="text-xl font-bold mb-2">{item.title}</h3>
+              <p className="text-slate-600 dark:text-slate-400">{item.description}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Demo Scoreboard */}
       <section>
-        <h2 className="mb-8 text-center text-3xl font-bold text-slate-900 dark:text-white">
-          Professional Scoreboard Display
+        <h2 className="mb-4 text-center text-3xl font-bold text-slate-900 dark:text-white">
+          Live Scoreboard Preview
         </h2>
+        <p className="text-center text-slate-500 mb-8">Watch the scores update in real-time</p>
         <div className="max-w-2xl mx-auto">
-          <Card className="overflow-hidden bg-gradient-to-b from-slate-900 to-slate-800 text-white">
-            <div className="p-6">
-              <div className="flex items-center justify-center gap-2 mb-4">
+          <Card className="overflow-hidden bg-gradient-to-b from-slate-900 to-slate-800 text-white shadow-2xl">
+            <div className="p-8">
+              <div className="flex items-center justify-center gap-2 mb-6">
                 <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
                 <span className="text-sm font-semibold text-red-400">LIVE</span>
-                <span className="text-slate-400 text-sm ml-2">Q3 • 8:42</span>
+                <span className="text-slate-400 text-sm ml-2">{demoQuarter} • 8:42</span>
               </div>
               <div className="grid grid-cols-3 gap-4 items-center">
                 <div className="text-center">
-                  <div className="h-16 w-16 mx-auto rounded-full bg-blue-600 flex items-center justify-center text-2xl font-bold mb-2">
+                  <div className="h-20 w-20 mx-auto rounded-full bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-2xl font-bold mb-3 shadow-lg">
                     KC
                   </div>
-                  <p className="font-semibold">Chiefs</p>
-                  <p className="text-5xl font-bold mt-2">24</p>
+                  <p className="font-semibold text-lg">Chiefs</p>
+                  <p className="text-6xl font-bold mt-2 transition-all duration-300">{demoScore.home}</p>
                 </div>
                 <div className="text-center">
-                  <p className="text-slate-400 text-lg">VS</p>
+                  <div className="text-slate-500 text-sm mb-2">VS</div>
+                  <div className="h-px w-12 mx-auto bg-slate-700" />
                 </div>
                 <div className="text-center">
-                  <div className="h-16 w-16 mx-auto rounded-full bg-red-600 flex items-center justify-center text-2xl font-bold mb-2">
+                  <div className="h-20 w-20 mx-auto rounded-full bg-gradient-to-br from-amber-500 to-red-600 flex items-center justify-center text-2xl font-bold mb-3 shadow-lg">
                     SF
                   </div>
-                  <p className="font-semibold">49ers</p>
-                  <p className="text-5xl font-bold mt-2">21</p>
+                  <p className="font-semibold text-lg">49ers</p>
+                  <p className="text-6xl font-bold mt-2 transition-all duration-300">{demoScore.away}</p>
                 </div>
               </div>
             </div>
           </Card>
+          <p className="text-center text-sm text-slate-500 mt-4">
+            <Smartphone className="inline h-4 w-4 mr-1" />
+            Works on any device • No app required
+          </p>
+        </div>
+      </section>
+
+      {/* Use Cases */}
+      <section className="py-8">
+        <h2 className="mb-8 text-center text-3xl font-bold text-slate-900 dark:text-white">
+          Perfect For
+        </h2>
+        <div className="grid md:grid-cols-4 gap-4 max-w-4xl mx-auto">
+          {[
+            { icon: '🏈', title: 'Fantasy Leagues', desc: 'Track your season' },
+            { icon: '📺', title: 'Streamers', desc: 'Perfect for broadcasts' },
+            { icon: '🏟️', title: 'Local Leagues', desc: 'Youth & adult leagues' },
+            { icon: '🎮', title: 'Madden Tourneys', desc: 'Esports brackets' },
+          ].map(item => (
+            <Card key={item.title} className="text-center p-6 hover:shadow-lg transition-shadow">
+              <div className="text-4xl mb-3">{item.icon}</div>
+              <h3 className="font-bold">{item.title}</h3>
+              <p className="text-sm text-slate-500">{item.desc}</p>
+            </Card>
+          ))}
         </div>
       </section>
 
       {/* Quick Start CTA */}
-      <section className="rounded-2xl bg-gradient-to-r from-green-600 to-emerald-700 p-8 text-white relative overflow-hidden">
+      <section className="rounded-2xl bg-gradient-to-r from-green-600 to-emerald-700 p-12 text-white relative overflow-hidden">
         {/* Field lines decoration */}
         <div className="absolute inset-0 opacity-10">
           <div className="h-full w-full" style={{
@@ -177,20 +325,45 @@ export default function HomePage() {
         </div>
         
         <div className="mx-auto max-w-2xl text-center relative">
-          <h2 className="mb-4 text-3xl font-bold">Ready for Kickoff?</h2>
-          <p className="mb-6 text-lg text-white/90">
-            Create your league or start scoring a game in under 60 seconds. No account required.
+          <h2 className="mb-4 text-4xl font-bold">Ready for Kickoff? 🏈</h2>
+          <p className="mb-8 text-xl text-white/90">
+            Create your league or start scoring a game in under 60 seconds.
           </p>
-          <div className="flex flex-wrap justify-center gap-4">
-            <Button asChild size="lg" variant="secondary" className="bg-white text-green-700 hover:bg-slate-100">
-              <Link to="/leagues">Create League</Link>
+          <div className="flex flex-wrap justify-center gap-4 mb-8">
+            <Button asChild size="lg" variant="secondary" className="bg-white dark:bg-slate-800 text-green-700 dark:text-green-400 hover:bg-slate-100 dark:hover:bg-slate-700 text-lg px-8">
+              <Link to="/leagues">
+                <Trophy className="h-5 w-5 mr-2" />
+                Create League
+              </Link>
             </Button>
-            <Button asChild size="lg" variant="outline" className="border-white text-white hover:bg-white/20">
-              <Link to="/scoreboards">Quick Scoreboard</Link>
+            <Button asChild size="lg" className="bg-transparent border-2 border-white text-white hover:bg-white/20 text-lg px-8">
+              <Link to="/scoreboards">
+                <Play className="h-5 w-5 mr-2" />
+                Quick Game
+              </Link>
             </Button>
+          </div>
+          <div className="flex justify-center gap-8 text-white/80 text-sm">
+            <span className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4" />
+              Free forever
+            </span>
+            <span className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4" />
+              No account needed
+            </span>
+            <span className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4" />
+              Works on mobile
+            </span>
           </div>
         </div>
       </section>
+
+      {/* Footer note */}
+      <div className="text-center text-sm text-slate-400 py-4">
+        Built for football fans, by football fans 🏈
+      </div>
     </div>
   )
 }

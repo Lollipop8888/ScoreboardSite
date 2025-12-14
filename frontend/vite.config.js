@@ -10,8 +10,14 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
+    allowedHosts: ['localhost', '127.0.0.1', '0.0.0.0', '192.168.3.157','gridiron.kropp.cloud'],
     proxy: {
       '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/uploads': {
         target: 'http://localhost:8000',
         changeOrigin: true,
       },

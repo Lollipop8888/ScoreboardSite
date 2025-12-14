@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Share2, Trophy, ExternalLink } from 'lucide-react'
+import { Share2, Trophy, ExternalLink, Users, Calendar } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { gameApi, bracketApi, scoreboardApi, createWebSocket } from '@/lib/api'
+import { GameScoreboardDisplay } from '@/components/GameScoreboardDisplay'
+import { gameApi, standaloneGameApi, bracketApi, scoreboardApi, leagueApi, createWebSocket } from '@/lib/api'
 
 export default function SharePage() {
   const { type, code } = useParams()
@@ -16,13 +17,21 @@ export default function SharePage() {
       let result
       switch (type) {
         case 'game':
-          result = await gameApi.getByShareCode(code)
+          // Try league game first, then standalone game
+          try {
+            result = await gameApi.getByShareCode(code)
+          } catch (err) {
+            result = await standaloneGameApi.getByShareCode(code)
+          }
           break
         case 'bracket':
           result = await bracketApi.getByShareCode(code)
           break
         case 'scoreboard':
           result = await scoreboardApi.getByShareCode(code)
+          break
+        case 'league':
+          result = await leagueApi.getByShareCode(code)
           break
         default:
           throw new Error('Invalid share type')
@@ -42,7 +51,7 @@ export default function SharePage() {
   useEffect(() => {
     if (!data) return
 
-    const ws = createWebSocket(type, code, (message) => {
+    const ws = createWebSocket(type, code.toUpperCase(), (message) => {
       if (type === 'game' && message.type === 'game_update') {
         setData((prev) => ({ ...prev, ...message.data }))
       } else if (type === 'scoreboard') {
@@ -70,7 +79,7 @@ export default function SharePage() {
     })
 
     return () => ws.close()
-  }, [data, type, code, loadData])
+  }, [data?.id, type, code, loadData])
 
   if (loading) {
     return (
@@ -83,8 +92,21 @@ export default function SharePage() {
   if (error) {
     return (
       <div className="text-center py-12">
-        <h2 className="text-2xl font-bold text-slate-900 mb-2">Not Found</h2>
-        <p className="text-slate-600 mb-4">The shared content could not be found.</p>
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Not Found</h2>
+        <p className="text-slate-600 dark:text-slate-400 mb-4">The shared content could not be found.</p>
+        <Button asChild>
+          <Link to="/">Go Home</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  // Handle case where data is null but no error
+  if (!data) {
+    return (
+      <div className="text-center py-12">
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Not Found</h2>
+        <p className="text-slate-600 dark:text-slate-400 mb-4">The shared content could not be found.</p>
         <Button asChild>
           <Link to="/">Go Home</Link>
         </Button>
@@ -105,69 +127,45 @@ export default function SharePage() {
     return <SharedBracket bracket={data} />
   }
 
+  if (type === 'league') {
+    return <SharedLeague league={data} />
+  }
+
   return null
 }
 
 function SharedGame({ game }) {
+  // Parse display state from JSON - handle both string and object
+  let displayState = {}
+  try {
+    if (typeof game.display_state === 'string' && game.display_state) {
+      displayState = JSON.parse(game.display_state)
+    } else if (typeof game.display_state === 'object' && game.display_state) {
+      displayState = game.display_state
+    }
+  } catch (e) {
+    console.error('Failed to parse display_state:', e)
+  }
+  
+  // Determine gameStatus - use displayState first, then fall back to quarter-based status
+  const gameStatus = displayState.gameStatus || 
+    (game.quarter === 'Pregame' ? 'pregame' : 
+     game.quarter === 'Final' ? 'final' : 
+     game.quarter === 'Halftime' ? 'halftime-show' : null)
+
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      {/* Status */}
-      <div className="flex items-center justify-center gap-3">
-        {game.status === 'live' && (
-          <>
-            <span className="h-3 w-3 animate-pulse rounded-full bg-red-500" />
-            <span className="font-bold text-red-600 text-lg">LIVE</span>
-          </>
-        )}
-        {game.status === 'final' && (
-          <span className="font-bold text-slate-600 text-lg">FINAL</span>
-        )}
-        {game.quarter && game.status !== 'scheduled' && (
-          <span className="text-slate-600">• {game.quarter}</span>
-        )}
-        {game.game_time && game.status === 'live' && (
-          <span className="text-slate-600">• {game.game_time}</span>
-        )}
-      </div>
-
-      {/* Scoreboard */}
-      <Card className="overflow-hidden">
-        <div className="grid grid-cols-3">
-          {/* Away Team */}
-          <div className="p-6 text-center" style={{ backgroundColor: `${game.away_team.color}15` }}>
-            <div
-              className="mx-auto mb-3 h-16 w-16 rounded-full flex items-center justify-center text-2xl font-bold text-white"
-              style={{ backgroundColor: game.away_team.color }}
-            >
-              {game.away_team.abbreviation || game.away_team.name.substring(0, 2).toUpperCase()}
-            </div>
-            <h2 className="font-bold text-slate-900">{game.away_team.name}</h2>
-            <div className="mt-3 text-5xl font-bold" style={{ color: game.away_team.color }}>
-              {game.away_score}
-            </div>
-          </div>
-
-          {/* VS */}
-          <div className="flex items-center justify-center bg-slate-50">
-            <span className="text-3xl font-bold text-slate-300">VS</span>
-          </div>
-
-          {/* Home Team */}
-          <div className="p-6 text-center" style={{ backgroundColor: `${game.home_team.color}15` }}>
-            <div
-              className="mx-auto mb-3 h-16 w-16 rounded-full flex items-center justify-center text-2xl font-bold text-white"
-              style={{ backgroundColor: game.home_team.color }}
-            >
-              {game.home_team.abbreviation || game.home_team.name.substring(0, 2).toUpperCase()}
-            </div>
-            <h2 className="font-bold text-slate-900">{game.home_team.name}</h2>
-            <div className="mt-3 text-5xl font-bold" style={{ color: game.home_team.color }}>
-              {game.home_score}
-            </div>
-          </div>
-        </div>
-      </Card>
-
+    <div className="max-w-2xl mx-auto space-y-4">
+      <GameScoreboardDisplay 
+        game={game}
+        displayState={displayState}
+        possession={game.possession}
+        down={game.down}
+        distance={game.distance}
+        playClock={game.play_clock}
+        homeTimeouts={game.home_timeouts}
+        awayTimeouts={game.away_timeouts}
+        gameStatus={gameStatus}
+      />
       <p className="text-center text-sm text-slate-500">
         Watching live • Updates automatically
       </p>
@@ -180,10 +178,19 @@ function SharedScoreboard({ scoreboard }) {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold text-slate-900">{scoreboard.name}</h1>
-        {scoreboard.description && (
-          <p className="text-slate-600 mt-1">{scoreboard.description}</p>
+      <div className="flex items-start justify-between">
+        <div className="flex-1 text-center">
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{scoreboard.name}</h1>
+          {scoreboard.description && (
+            <p className="text-slate-600 dark:text-slate-400 mt-1">{scoreboard.description}</p>
+          )}
+        </div>
+        {scoreboard.logo_url && (
+          <img 
+            src={scoreboard.logo_url} 
+            alt="Logo" 
+            className="h-16 w-auto max-w-32 object-contain ml-4"
+          />
         )}
       </div>
 
@@ -279,7 +286,7 @@ function SharedBracket({ bracket }) {
         <div className="flex gap-8 min-w-max justify-center">
           {rounds.map((roundNum) => (
             <div key={roundNum} className="flex flex-col">
-              <h3 className="text-sm font-semibold text-slate-600 mb-4 text-center">
+              <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-400 mb-4 text-center">
                 {getRoundName(parseInt(roundNum), numRounds)}
               </h3>
               <div className="flex flex-col justify-around flex-1 gap-4">
@@ -287,13 +294,13 @@ function SharedBracket({ bracket }) {
                   .sort((a, b) => a.match_number - b.match_number)
                   .map((match) => (
                     <div key={match.id} className="w-56">
-                      <Card className={match.status === 'completed' ? 'bg-slate-50' : ''}>
+                      <Card className={match.status === 'completed' ? 'bg-slate-50 dark:bg-slate-800/50' : ''}>
                         <CardContent className="p-3 space-y-2">
                           <div
                             className={`flex items-center justify-between p-2 rounded ${
                               match.winner?.id === match.team1?.id
-                                ? 'bg-green-50 border border-green-200'
-                                : 'bg-slate-50'
+                                ? 'bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800'
+                                : 'bg-slate-50 dark:bg-slate-800'
                             }`}
                           >
                             <span className={`text-sm font-medium truncate ${
@@ -306,8 +313,8 @@ function SharedBracket({ bracket }) {
                           <div
                             className={`flex items-center justify-between p-2 rounded ${
                               match.winner?.id === match.team2?.id
-                                ? 'bg-green-50 border border-green-200'
-                                : 'bg-slate-50'
+                                ? 'bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800'
+                                : 'bg-slate-50 dark:bg-slate-800'
                             }`}
                           >
                             <span className={`text-sm font-medium truncate ${
@@ -330,6 +337,175 @@ function SharedBracket({ bracket }) {
       <p className="text-center text-sm text-slate-500">
         Watching live • Updates automatically
       </p>
+    </div>
+  )
+}
+
+function SharedLeague({ league }) {
+  const [standings, setStandings] = useState([])
+  const [games, setGames] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function loadLeagueData() {
+      try {
+        const [standingsData, gamesData] = await Promise.all([
+          leagueApi.getStandings(league.id),
+          leagueApi.getGames(league.id)
+        ])
+        setStandings(standingsData || [])
+        setGames(gamesData || [])
+      } catch (e) {
+        console.error('Failed to load league data:', e)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadLeagueData()
+  }, [league.id])
+
+  // Sort games - upcoming first, then by date
+  const sortedGames = [...games].sort((a, b) => {
+    if (a.status === 'live' && b.status !== 'live') return -1
+    if (b.status === 'live' && a.status !== 'live') return 1
+    if (a.status === 'scheduled' && b.status === 'completed') return -1
+    if (b.status === 'scheduled' && a.status === 'completed') return 1
+    return new Date(a.scheduled_time || 0) - new Date(b.scheduled_time || 0)
+  })
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="text-center">
+        <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{league.name}</h1>
+        <p className="text-slate-600 dark:text-slate-400 mt-1">{league.sport} - {league.season}</p>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-8">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-2 gap-6">
+          {/* Standings */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Trophy className="h-5 w-5" />
+                Standings
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {standings.length === 0 ? (
+                <p className="text-center text-slate-500 py-4">No teams yet</p>
+              ) : (
+                <div className="space-y-2">
+                  {standings.map((team, index) => (
+                    <div key={team.id} className="flex items-center gap-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-800">
+                      <span className="font-bold text-slate-400 w-6">{index + 1}</span>
+                      <div
+                        className="h-4 w-4 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: team.color }}
+                      />
+                      <span className="font-medium flex-1 truncate">{team.name}</span>
+                      <span className="text-sm font-semibold text-green-600">{team.wins || 0}W</span>
+                      <span className="text-sm font-semibold text-red-600">{team.losses || 0}L</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Recent/Upcoming Games */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Calendar className="h-5 w-5" />
+                Games
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {sortedGames.length === 0 ? (
+                <p className="text-center text-slate-500 py-4">No games scheduled</p>
+              ) : (
+                <div className="space-y-3">
+                  {sortedGames.slice(0, 10).map((game) => (
+                    <div key={game.id} className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="h-3 w-3 rounded-full"
+                            style={{ backgroundColor: game.away_team?.color }}
+                          />
+                          <span className="font-medium text-sm">{game.away_team?.abbreviation || 'TBD'}</span>
+                        </div>
+                        <span className="font-bold">{game.away_score}</span>
+                      </div>
+                      <div className="flex items-center justify-between mt-1">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="h-3 w-3 rounded-full"
+                            style={{ backgroundColor: game.home_team?.color }}
+                          />
+                          <span className="font-medium text-sm">{game.home_team?.abbreviation || 'TBD'}</span>
+                        </div>
+                        <span className="font-bold">{game.home_score}</span>
+                      </div>
+                      <div className="mt-2 text-xs text-center">
+                        {game.status === 'live' ? (
+                          <span className="text-red-500 font-semibold">● LIVE - {game.quarter}</span>
+                        ) : game.status === 'completed' ? (
+                          <span className="text-slate-500">Final</span>
+                        ) : game.scheduled_time ? (
+                          <span className="text-slate-500">
+                            {new Date(game.scheduled_time).toLocaleDateString()}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">Scheduled</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Teams */}
+      {league.teams && league.teams.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Teams
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {league.teams.map((team) => (
+                <div key={team.id} className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-800">
+                  {team.logo_url ? (
+                    <img src={team.logo_url} alt="" className="h-8 w-8 object-contain" />
+                  ) : (
+                    <div
+                      className="h-8 w-8 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: team.color }}
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{team.name}</p>
+                    {team.abbreviation && (
+                      <p className="text-xs text-slate-500">{team.abbreviation}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

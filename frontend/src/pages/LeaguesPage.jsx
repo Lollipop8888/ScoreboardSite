@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import { Plus, Trophy, Calendar, ChevronRight, Pencil, Trash2, MoreVertical } from 'lucide-react'
+import { Link, useParams } from 'react-router-dom'
+import { Plus, Trophy, Calendar, ChevronRight, Pencil, Trash2, MoreVertical, User } from 'lucide-react'
+import { useAuth } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -23,27 +24,46 @@ import {
 import { leagueApi } from '@/lib/api'
 
 export default function LeaguesPage() {
+  const { username } = useParams() // For /u/:username route
+  const { user } = useAuth()
   const [leagues, setLeagues] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editingLeague, setEditingLeague] = useState(null)
   const [formData, setFormData] = useState({
     name: '',
-    sport: '',
+    sport: 'Football',
     season: '',
   })
 
+  // Viewing another user's leagues (read-only)
+  const isViewingOtherUser = !!username
+  // Can edit if viewing own leagues (not another user's)
+  const canEdit = !isViewingOtherUser
+
+  // Reload leagues when user changes (login/logout) or username param changes
   useEffect(() => {
     loadLeagues()
-  }, [])
+  }, [user, username])
 
   async function loadLeagues() {
+    setLoading(true)
+    setError(null)
     try {
-      const data = await leagueApi.getAll()
+      let data
+      if (username) {
+        // Viewing another user's leagues
+        data = await leagueApi.getByUsername(username)
+      } else {
+        // Viewing own leagues
+        data = await leagueApi.getAll()
+      }
       setLeagues(data)
     } catch (error) {
       console.error('Failed to load leagues:', error)
+      setError(error.message)
     } finally {
       setLoading(false)
     }
@@ -54,7 +74,7 @@ export default function LeaguesPage() {
     try {
       await leagueApi.create(formData)
       setDialogOpen(false)
-      setFormData({ name: '', sport: '', season: '' })
+      setFormData({ name: '', sport: 'Football', season: '' })
       loadLeagues()
     } catch (error) {
       console.error('Failed to create league:', error)
@@ -79,7 +99,7 @@ export default function LeaguesPage() {
       await leagueApi.update(editingLeague.id, formData)
       setEditDialogOpen(false)
       setEditingLeague(null)
-      setFormData({ name: '', sport: '', season: '' })
+      setFormData({ name: '', sport: 'Football', season: '' })
       loadLeagues()
     } catch (error) {
       console.error('Failed to update league:', error)
@@ -108,66 +128,88 @@ export default function LeaguesPage() {
     )
   }
 
+  if (error) {
+    return (
+      <div className="text-center py-12">
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
+          {error === 'User not found' ? 'User Not Found' : 'Error'}
+        </h2>
+        <p className="text-slate-600 dark:text-slate-400 mb-4">
+          {error === 'User not found' 
+            ? `The user "${username}" does not exist.`
+            : error}
+        </p>
+        <Button asChild>
+          <Link to="/">Go Home</Link>
+        </Button>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">Leagues</h1>
-          <p className="text-slate-600">Manage your leagues and seasons</p>
-        </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" />
-              New League
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <form onSubmit={handleSubmit}>
-              <DialogHeader>
-                <DialogTitle>Create New League</DialogTitle>
-                <DialogDescription>
-                  Set up a new league to track teams, games, and standings.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="name">League Name</Label>
-                  <Input
-                    id="name"
-                    placeholder="e.g., NFL 2024"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="sport">Sport</Label>
-                  <Input
-                    id="sport"
-                    placeholder="e.g., Football"
-                    value={formData.sport}
-                    onChange={(e) => setFormData({ ...formData, sport: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="season">Season</Label>
-                  <Input
-                    id="season"
-                    placeholder="e.g., 2024-2025"
-                    value={formData.season}
-                    onChange={(e) => setFormData({ ...formData, season: e.target.value })}
-                    required
-                  />
-                </div>
+          {isViewingOtherUser ? (
+            <>
+              <div className="flex items-center gap-2 mb-1">
+                <User className="h-5 w-5 text-slate-400" />
+                <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{username}'s Leagues</h1>
               </div>
-              <DialogFooter>
-                <Button type="submit">Create League</Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+              <p className="text-slate-600 dark:text-slate-400">Public leagues shared by {username}</p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Leagues</h1>
+              <p className="text-slate-600 dark:text-slate-400">Manage your leagues and seasons</p>
+            </>
+          )}
+        </div>
+        {canEdit && (
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button className="gap-2">
+                <Plus className="h-4 w-4" />
+                New League
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <form onSubmit={handleSubmit}>
+                <DialogHeader>
+                  <DialogTitle>Create New League</DialogTitle>
+                  <DialogDescription>
+                    Set up a new league to track teams, games, and standings.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="name">League Name</Label>
+                    <Input
+                      id="name"
+                      placeholder="e.g., NFL 2024"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="season">Season</Label>
+                    <Input
+                      id="season"
+                      placeholder="e.g., 2024-2025"
+                      value={formData.season}
+                      onChange={(e) => setFormData({ ...formData, season: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button type="submit">Create League</Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       {/* Edit League Dialog */}
@@ -188,16 +230,6 @@ export default function LeaguesPage() {
                   placeholder="e.g., NFL 2024"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="edit-sport">Sport</Label>
-                <Input
-                  id="edit-sport"
-                  placeholder="e.g., Football"
-                  value={formData.sport}
-                  onChange={(e) => setFormData({ ...formData, sport: e.target.value })}
                   required
                 />
               </div>
@@ -226,8 +258,18 @@ export default function LeaguesPage() {
         <Card className="py-12 text-center">
           <CardContent>
             <Trophy className="mx-auto h-12 w-12 text-slate-400" />
-            <h3 className="mt-4 text-lg font-semibold text-slate-900">No leagues yet</h3>
-            <p className="mt-2 text-slate-600">Create your first league to get started.</p>
+            <h3 className="mt-4 text-lg font-semibold text-slate-900 dark:text-white">
+              {isViewingOtherUser 
+                ? 'No public leagues'
+                : user ? 'No leagues yet' : 'Sign in to view your leagues'}
+            </h3>
+            <p className="mt-2 text-slate-600 dark:text-slate-400">
+              {isViewingOtherUser
+                ? `${username} hasn't created any leagues yet.`
+                : user 
+                  ? 'Create your first league to get started.' 
+                  : 'Create an account or sign in to manage your leagues. Your data is private and only visible to you.'}
+            </p>
           </CardContent>
         </Card>
       ) : (
@@ -244,39 +286,38 @@ export default function LeaguesPage() {
                       <ChevronRight className="h-5 w-5 text-slate-400" />
                     </div>
                     <CardTitle className="mt-4">{league.name}</CardTitle>
-                    <CardDescription>{league.sport}</CardDescription>
+                    <CardDescription className="flex items-center gap-1">
+                      <Calendar className="h-3 w-3" />
+                      {league.season}
+                    </CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center gap-2 text-sm text-slate-500">
-                      <Calendar className="h-4 w-4" />
-                      <span>{league.season}</span>
-                    </div>
-                  </CardContent>
                 </Card>
               </Link>
-              {/* Edit/Delete dropdown */}
-              <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 bg-white/80 hover:bg-white" onClick={(e) => e.preventDefault()}>
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={(e) => openEditDialog(league, e)}>
-                      <Pencil className="h-4 w-4 mr-2" />
-                      Edit
-                    </DropdownMenuItem>
-                    <DropdownMenuItem 
-                      onClick={(e) => handleDelete(league, e)}
-                      className="text-red-600 focus:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
+              {/* Edit/Delete dropdown - only show for own leagues */}
+              {canEdit && (
+                <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 bg-background/80 hover:bg-background" onClick={(e) => e.preventDefault()}>
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={(e) => openEditDialog(league, e)}>
+                        <Pencil className="h-4 w-4 mr-2" />
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        onClick={(e) => handleDelete(league, e)}
+                        className="text-red-600 focus:text-red-600"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
             </div>
           ))}
         </div>
