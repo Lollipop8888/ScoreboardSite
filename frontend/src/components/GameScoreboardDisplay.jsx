@@ -262,7 +262,7 @@ export function GameScoreboardDisplay({
         </div>
       )}
       
-      <div className="flex-1 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 rounded-xl p-6 text-white relative shadow-2xl border border-slate-800/50">
+      <div className="flex-1 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 rounded-xl p-6 text-white relative shadow-2xl border border-slate-800/50 overflow-visible">
         {/* Subtle ambient background glow */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-24 -left-24 w-48 h-48 bg-blue-500/5 rounded-full blur-3xl"></div>
@@ -1040,8 +1040,8 @@ export function GameScoreboardDisplay({
                           ? 'bg-gradient-to-r from-white/20 via-white/30 to-white/20 ring-2 ring-white/50 animate-bounce-in'
                           : down === 4
                             ? 'bg-gradient-to-r from-red-900/40 via-red-800/30 to-red-900/40 border border-red-700/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]'
-                            : down === 3
-                              ? 'bg-gradient-to-r from-orange-900/20 via-orange-800/15 to-orange-900/20 border border-orange-700/30'
+                            : (down === 3 && distance >= 5)
+                              ? 'bg-gradient-to-r from-yellow-700/10 via-yellow-600/8 to-yellow-700/10 border border-yellow-500/15'
                               : 'bg-slate-800/60 border border-slate-700/50'
         }`}>
           {/* Animated shimmer effect for special states */}
