@@ -493,6 +493,22 @@ def get_league_games(league_id: str, db: Session = Depends(get_db)):
     ).filter(models.Game.league_id == league_id).all()
 
 
+def calculate_live_game_time(game):
+    """Calculate the current game time if timer is running"""
+    if game.timer_running and game.timer_started_at and game.timer_started_seconds is not None:
+        now = datetime.utcnow()
+        elapsed_seconds = int((now - game.timer_started_at).total_seconds())
+        current_seconds = max(0, game.timer_started_seconds - elapsed_seconds)
+        mins = current_seconds // 60
+        secs = current_seconds % 60
+        game.game_time = f"{mins}:{secs:02d}"
+        
+        # If time ran out, stop the timer
+        if current_seconds <= 0:
+            game.timer_running = False
+    return game
+
+
 @app.get("/api/games/{game_id}", response_model=schemas.GameWithTeams)
 def get_game(game_id: str, db: Session = Depends(get_db)):
     game = db.query(models.Game).options(
@@ -501,6 +517,8 @@ def get_game(game_id: str, db: Session = Depends(get_db)):
     ).filter(models.Game.id == game_id).first()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # Calculate live game time if timer is running
+    calculate_live_game_time(game)
     return game
 
 
@@ -512,6 +530,8 @@ def get_game_by_share_code(share_code: str, db: Session = Depends(get_db)):
     ).filter(models.Game.share_code == share_code.upper()).first()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # Calculate live game time if timer is running
+    calculate_live_game_time(game)
     return game
 
 

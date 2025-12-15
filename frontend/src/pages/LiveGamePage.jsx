@@ -275,6 +275,31 @@ export default function LiveGamePage({ standalone = false }) {
   const loadGame = useCallback(async () => {
     try {
       const data = await api.get(gameId)
+      
+      // If game clock timer was running, calculate elapsed time and resume
+      if (data.timer_running && data.timer_started_at && data.timer_started_seconds !== null) {
+        const startedAt = new Date(data.timer_started_at)
+        const now = new Date()
+        const elapsedSeconds = Math.floor((now - startedAt) / 1000)
+        const currentSeconds = Math.max(0, data.timer_started_seconds - elapsedSeconds)
+        // Format time inline since formatTime isn't defined yet
+        const mins = Math.floor(currentSeconds / 60)
+        const secs = currentSeconds % 60
+        const currentTime = `${mins}:${secs.toString().padStart(2, '0')}`
+        
+        // Update game time based on elapsed time
+        data.game_time = currentTime
+        
+        // Resume the timer if there's still time left
+        if (currentSeconds > 0) {
+          // Mark that timer should resume - will be handled after component mounts
+          data._shouldResumeTimer = true
+        } else {
+          // Timer ran out while away, stop it
+          api.update(gameId, { game_time: '0:00', timer_running: false }).catch(() => {})
+        }
+      }
+      
       setGame(data)
       // Sync simple timer state from game data
       if (data.timer_seconds !== undefined) {
@@ -309,6 +334,15 @@ export default function LiveGamePage({ standalone = false }) {
   useEffect(() => {
     gameRef.current = game
   }, [game])
+
+  // Resume timer if it was running when page loaded
+  useEffect(() => {
+    if (game?._shouldResumeTimer && !timerRunningRef.current) {
+      // Clear the flag and start timer
+      setGame(prev => prev ? { ...prev, _shouldResumeTimer: false } : prev)
+      startTimer()
+    }
+  }, [game?._shouldResumeTimer])
 
   // Set initial state based on game status (pregame defaults)
   useEffect(() => {
@@ -871,6 +905,15 @@ export default function LiveGamePage({ standalone = false }) {
     if (timerRunningRef.current) return
     timerRunningRef.current = true
     setTimerRunning(true)
+    
+    // Save timer state to backend for persistence
+    const currentSeconds = parseTime(game?.game_time || '15:00')
+    api.update(gameId, { 
+      timer_running: true, 
+      timer_started_at: new Date().toISOString(),
+      timer_started_seconds: currentSeconds
+    }).catch(() => {})
+    
     // Tick immediately, then schedule next
     doGameTick()
   }
@@ -893,7 +936,7 @@ export default function LiveGamePage({ standalone = false }) {
     if (newSeconds <= 0) {
       timerRunningRef.current = false
       setTimerRunning(false)
-      api.update(gameId, { game_time: '0:00' }).catch(() => {})
+      api.update(gameId, { game_time: '0:00', timer_running: false }).catch(() => {})
       if (['Q1', 'Q2', 'Q3'].includes(currentGame.quarter)) {
         setGameStatus('end-quarter')
       } else if (currentGame.quarter === 'Q4') {
@@ -916,7 +959,7 @@ export default function LiveGamePage({ standalone = false }) {
       timerRunningRef.current = false
       setTimerRunning(false)
       setShow2MinWarningPrompt(true)
-      api.update(gameId, { game_time: newTime }).catch(() => {})
+      api.update(gameId, { game_time: newTime, timer_running: false }).catch(() => {})
       return
     }
     
@@ -932,6 +975,8 @@ export default function LiveGamePage({ standalone = false }) {
   function stopTimer() {
     timerRunningRef.current = false
     setTimerRunning(false)
+    // Save stopped state to backend
+    api.update(gameId, { timer_running: false }).catch(() => {})
     return game?.game_time
   }
 

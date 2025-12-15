@@ -100,6 +100,10 @@ class Game(Base):
     home_timeouts = Column(Integer, default=3)
     away_timeouts = Column(Integer, default=3)
     play_clock = Column(Integer, default=40)
+    # Timer state for persistent clock tracking
+    timer_running = Column(Boolean, default=False)  # Whether game clock is running
+    timer_started_at = Column(DateTime)  # When timer was started (for calculating elapsed time)
+    timer_started_seconds = Column(Integer)  # Game time in seconds when timer was started
     # Display state for overlays/animations
     display_state = Column(Text)  # JSON string for ephemeral display state (flags, big plays, etc.)
     created_at = Column(DateTime, default=datetime.utcnow)

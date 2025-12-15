@@ -1014,10 +1014,10 @@ export function GameScoreboardDisplay({
       
       {/* Down & Distance Bar - animates collapse/expand horizontally from center */}
       <div 
-        className={`transition-all duration-700 ease-in-out ${
+        className={`transition-all duration-500 ease-out origin-center ${
           hideDownDistance && !(flagDisplayStage > 0 || reviewDisplayStage > 0 || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break')
-            ? removeDownDistanceSpace ? 'hidden' : 'w-0 opacity-0 overflow-hidden h-0 mb-0'
-            : 'w-full opacity-100 mb-4'
+            ? removeDownDistanceSpace ? 'hidden' : 'scale-x-0 opacity-0 h-0 mb-0'
+            : 'scale-x-100 opacity-100 mb-4'
         }`}
         style={{ margin: '0 auto' }}
       >
@@ -1037,7 +1037,7 @@ export function GameScoreboardDisplay({
                       : showIncomplete
                         ? 'bg-gradient-to-r from-slate-700 via-slate-500 to-slate-700 ring-2 ring-slate-400 shadow-[0_0_20px_rgba(148,163,184,0.4)] animate-incomplete-shake'
                         : showOutOfBounds
-                          ? 'bg-gradient-to-r from-white/20 via-white/30 to-white/20 ring-2 ring-white/50 animate-bounce-in'
+                          ? 'bg-gradient-to-r from-white/20 via-white/30 to-white/20 ring-2 ring-white/50 animate-oob-slide'
                           : down === 4
                             ? 'bg-gradient-to-r from-red-900/40 via-red-800/30 to-red-900/40 border border-red-700/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]'
                             : (down === 3 && distance >= 5)

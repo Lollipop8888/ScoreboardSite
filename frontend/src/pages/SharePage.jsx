@@ -135,6 +135,34 @@ export default function SharePage() {
 }
 
 function SharedGame({ game }) {
+  const [liveGameTime, setLiveGameTime] = useState(null)
+  
+  // Live clock calculation - update every second when timer is running
+  useEffect(() => {
+    if (!game?.timer_running || !game?.timer_started_at || game?.timer_started_seconds === null) {
+      setLiveGameTime(null)
+      return
+    }
+    
+    const calculateLiveTime = () => {
+      const startedAt = new Date(game.timer_started_at)
+      const now = new Date()
+      const elapsedSeconds = Math.floor((now - startedAt) / 1000)
+      const currentSeconds = Math.max(0, game.timer_started_seconds - elapsedSeconds)
+      const mins = Math.floor(currentSeconds / 60)
+      const secs = currentSeconds % 60
+      setLiveGameTime(`${mins}:${secs.toString().padStart(2, '0')}`)
+    }
+    
+    // Calculate immediately
+    calculateLiveTime()
+    
+    // Update every second
+    const interval = setInterval(calculateLiveTime, 1000)
+    
+    return () => clearInterval(interval)
+  }, [game?.timer_running, game?.timer_started_at, game?.timer_started_seconds])
+
   // Parse display state from JSON - handle both string and object
   let displayState = {}
   try {
@@ -153,10 +181,13 @@ function SharedGame({ game }) {
      game.quarter === 'Final' ? 'final' : 
      game.quarter === 'Halftime' ? 'halftime-show' : null)
 
+  // Create game object with live time
+  const gameWithLiveTime = liveGameTime ? { ...game, game_time: liveGameTime } : game
+
   return (
     <div className="max-w-2xl mx-auto space-y-4">
       <GameScoreboardDisplay 
-        game={game}
+        game={gameWithLiveTime}
         displayState={displayState}
         possession={game.possession}
         down={game.down}

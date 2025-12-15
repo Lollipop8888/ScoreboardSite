@@ -223,8 +223,8 @@ export function AnimatedScore({
 
   const textStyle = { 
     color: color || '#ffffff',
-    textShadow: `0 0 8px rgba(255,255,255,0.9), 0 0 16px rgba(255,255,255,0.6), 0 0 24px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.9)`,
-    WebkitTextStroke: '2px rgba(255,255,255,0.8)',
+    textShadow: `0 0 6px rgba(255,255,255,0.7), 0 0 12px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.8)`,
+    WebkitTextStroke: '1.5px rgba(255,255,255,0.6)',
     paintOrder: 'stroke fill'
   }
 
@@ -236,10 +236,10 @@ export function AnimatedScore({
       )}
       style={{ padding: '16px 24px' }} // Padding for glow visibility (vertical and horizontal)
     >
-      {/* Inner container with clip for slide animation */}
+      {/* Inner container with clip for slide animation - only clip Y axis */}
       <div 
         className={cn(
-          "relative inline-flex items-center justify-center overflow-hidden",
+          "relative inline-flex items-center justify-center overflow-x-visible overflow-y-clip",
           heightClasses[size] || heightClasses.default
         )}
       >

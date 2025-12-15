@@ -185,6 +185,14 @@ export default {
           "50%": { backgroundPosition: "100% 0", transform: "scale(1.02)" },
           "100%": { backgroundPosition: "-100% 0", transform: "scale(1)" },
         },
+        // Out of bounds - subtle slide from side with flash
+        "oob-slide": {
+          "0%": { transform: "translateX(-10px)", opacity: "0" },
+          "30%": { transform: "translateX(3px)", opacity: "1" },
+          "50%": { transform: "translateX(-2px)", filter: "brightness(1.3)" },
+          "70%": { transform: "translateX(1px)" },
+          "100%": { transform: "translateX(0)", filter: "brightness(1)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -211,6 +219,7 @@ export default {
         "slide-in-down": "slide-in-down 0.5s ease-out forwards",
         "incomplete-shake": "incomplete-shake 0.6s ease-out",
         "goal-shimmer": "goal-shimmer 2s ease-in-out infinite",
+        "oob-slide": "oob-slide 0.5s ease-out",
       },
     },
   },

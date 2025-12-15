@@ -91,6 +91,34 @@ export default function OBSDisplayPage() {
     }
   }, [game?.home_score, game?.away_score, fade, prevScores])
 
+  // Live clock calculation - update every second when timer is running
+  const [liveGameTime, setLiveGameTime] = useState(null)
+  
+  useEffect(() => {
+    if (!game?.timer_running || !game?.timer_started_at || game?.timer_started_seconds === null) {
+      setLiveGameTime(null)
+      return
+    }
+    
+    const calculateLiveTime = () => {
+      const startedAt = new Date(game.timer_started_at)
+      const now = new Date()
+      const elapsedSeconds = Math.floor((now - startedAt) / 1000)
+      const currentSeconds = Math.max(0, game.timer_started_seconds - elapsedSeconds)
+      const mins = Math.floor(currentSeconds / 60)
+      const secs = currentSeconds % 60
+      setLiveGameTime(`${mins}:${secs.toString().padStart(2, '0')}`)
+    }
+    
+    // Calculate immediately
+    calculateLiveTime()
+    
+    // Update every second
+    const interval = setInterval(calculateLiveTime, 1000)
+    
+    return () => clearInterval(interval)
+  }, [game?.timer_running, game?.timer_started_at, game?.timer_started_seconds])
+
   if (loading) {
     return <div className="min-h-screen bg-transparent" />
   }
@@ -116,7 +144,7 @@ export default function OBSDisplayPage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
-  const timerDisplay = game.simple_mode ? formatTimer(game.timer_seconds) : game.game_time
+  const timerDisplay = game.simple_mode ? formatTimer(game.timer_seconds) : (liveGameTime || game.game_time)
 
   // Fade transition style
   const fadeStyle = fade ? {
@@ -433,11 +461,14 @@ export default function OBSDisplayPage() {
      game.quarter === 'Halftime' ? 'halftime-show' : null)
 
   // DEFAULT LAYOUT - Same as share page display, just no background, wider to reduce height
+  // Create game object with live time
+  const gameWithLiveTime = liveGameTime ? { ...game, game_time: liveGameTime } : game
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4" style={fadeStyle}>
       <div className="max-w-6xl w-full">
         <GameScoreboardDisplay 
-          game={game}
+          game={gameWithLiveTime}
           displayState={displayState}
           possession={displayState.possession || game.possession}
           down={displayState.down || game.down}

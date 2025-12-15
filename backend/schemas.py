@@ -167,6 +167,9 @@ class GameUpdate(BaseModel):
     home_timeouts: Optional[int] = None
     away_timeouts: Optional[int] = None
     play_clock: Optional[int] = None
+    timer_running: Optional[bool] = None
+    timer_started_at: Optional[datetime] = None
+    timer_started_seconds: Optional[int] = None
     display_state: Optional[str] = None
 
 
@@ -189,6 +192,9 @@ class GameWithTeams(BaseModel):
     home_timeouts: Optional[int] = 3
     away_timeouts: Optional[int] = 3
     play_clock: Optional[int] = 40
+    timer_running: Optional[bool] = False
+    timer_started_at: Optional[datetime] = None
+    timer_started_seconds: Optional[int] = None
     display_state: Optional[str] = None
     created_at: datetime
     updated_at: datetime
