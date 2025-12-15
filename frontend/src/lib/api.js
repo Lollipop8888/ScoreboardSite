@@ -20,6 +20,14 @@ async function fetchApi(endpoint, options = {}) {
   });
   
   if (!response.ok) {
+    // If unauthorized or forbidden, redirect to home page
+    if (response.status === 401 || response.status === 403) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/';
+      return;
+    }
+    
     let errorMessage = 'An error occurred';
     try {
       const error = await response.json();

@@ -129,6 +129,62 @@ export default {
           "0%": { transform: "scale(1)", opacity: "1" },
           "100%": { transform: "scale(2.5)", opacity: "0" },
         },
+        // Sliding digit animations
+        "slide-out": {
+          "0%": { transform: "translateY(0)", opacity: "1" },
+          "100%": { transform: "translateY(var(--slide-dir, -100%))", opacity: "0" },
+        },
+        "slide-in": {
+          "0%": { transform: "translateY(var(--slide-dir, 100%))", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        // Shimmer effect for first down
+        "shimmer": {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
+        // Fade in animation for D&D text changes - with slide up effect
+        "fade-in": {
+          "0%": { opacity: "0", transform: "translateY(8px) scale(0.95)" },
+          "100%": { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
+        // Score slide animations - vertical
+        "slide-out-up": {
+          "0%": { transform: "translateY(0)", opacity: "1" },
+          "100%": { transform: "translateY(-100%)", opacity: "0" },
+        },
+        "slide-out-down": {
+          "0%": { transform: "translateY(0)", opacity: "1" },
+          "100%": { transform: "translateY(100%)", opacity: "0" },
+        },
+        "slide-in-up": {
+          "0%": { transform: "translateY(100%)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        "slide-in-down": {
+          "0%": { transform: "translateY(-100%)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        // Incomplete pass animation - shake and flash
+        "incomplete-shake": {
+          "0%": { transform: "translateX(0)", opacity: "1" },
+          "10%": { transform: "translateX(-4px)" },
+          "20%": { transform: "translateX(4px)" },
+          "30%": { transform: "translateX(-4px)" },
+          "40%": { transform: "translateX(4px)" },
+          "50%": { transform: "translateX(-2px)" },
+          "60%": { transform: "translateX(2px)" },
+          "70%": { transform: "translateX(-1px)" },
+          "80%": { transform: "translateX(1px)" },
+          "90%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(0)" },
+        },
+        // Goal line shimmer - gold gradient movement
+        "goal-shimmer": {
+          "0%": { backgroundPosition: "-100% 0", transform: "scale(1)" },
+          "50%": { backgroundPosition: "100% 0", transform: "scale(1.02)" },
+          "100%": { backgroundPosition: "-100% 0", transform: "scale(1)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -145,6 +201,16 @@ export default {
         "label-float": "label-float 1.2s ease-out forwards",
         "firework": "firework 0.8s ease-out forwards",
         "timeout-used": "timeout-used 1.5s ease-out forwards",
+        "slide-out": "slide-out 0.3s ease-out forwards",
+        "slide-in": "slide-in 0.3s ease-out forwards",
+        "shimmer": "shimmer 1.5s ease-in-out infinite",
+        "fade-in": "fade-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)",
+        "slide-out-up": "slide-out-up 0.5s ease-out forwards",
+        "slide-out-down": "slide-out-down 0.5s ease-out forwards",
+        "slide-in-up": "slide-in-up 0.5s ease-out forwards",
+        "slide-in-down": "slide-in-down 0.5s ease-out forwards",
+        "incomplete-shake": "incomplete-shake 0.6s ease-out",
+        "goal-shimmer": "goal-shimmer 2s ease-in-out infinite",
       },
     },
   },

@@ -95,18 +95,16 @@ export default function LiveGamePage({ standalone = false }) {
   
   // Timer state
   const [timerRunning, setTimerRunning] = useState(false)
-  const timerRef = useRef(null)
-  const timerStartTimeRef = useRef(null) // Timestamp when timer started
-  const timerStartSecondsRef = useRef(null) // Game seconds when timer started
   const timerRunningRef = useRef(false) // Ref to track if timer is running (for sync)
+  const gameRef = useRef(null) // Ref to track current game state for timer
   
   // Play clock state
   const [playClock, setPlayClock] = useState(40)
   const [playClockRunning, setPlayClockRunning] = useState(false)
   const [showPlayClock, setShowPlayClock] = useState(true)
-  const playClockRef = useRef(null)
-  const playClockStartTimeRef = useRef(null) // Timestamp when play clock started
-  const playClockStartSecondsRef = useRef(null) // Seconds when play clock started
+  const playClockRunningRef = useRef(false)
+  const timeoutClockRunningRef = useRef(false)
+  const simpleTimerRunningRef = useRef(false)
   
   // Down & Distance state
   const [down, setDown] = useState(1)
@@ -188,7 +186,6 @@ export default function LiveGamePage({ standalone = false }) {
   const [usedTimeoutIndex, setUsedTimeoutIndex] = useState(null) // Which timeout was just used (1, 2, or 3)
   const [pendingTimeoutDuration, setPendingTimeoutDuration] = useState(null) // 'home' or 'away' - waiting for duration choice
   const [timeoutClock, setTimeoutClock] = useState(null) // Countdown seconds for timeout
-  const timeoutClockRef = useRef(null) // Interval ref for timeout clock
   
   // Score celebration overlay state
   const [scoreCelebration, setScoreCelebration] = useState(null) // { type: 'touchdown'|'fieldgoal', team: 'home'|'away', points: number }
@@ -268,9 +265,6 @@ export default function LiveGamePage({ standalone = false }) {
   // Simple mode timer state
   const [simpleTimerSeconds, setSimpleTimerSeconds] = useState(0)
   const [simpleTimerRunning, setSimpleTimerRunning] = useState(false)
-  const simpleTimerRef = useRef(null)
-  const simpleTimerStartRef = useRef(null) // Timestamp when simple timer started
-  const simpleTimerStartSecondsRef = useRef(null) // Seconds when simple timer started
   
   // Share dialog state
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
@@ -310,6 +304,11 @@ export default function LiveGamePage({ standalone = false }) {
   useEffect(() => {
     loadGame()
   }, [loadGame])
+
+  // Keep gameRef in sync with game state for timer access
+  useEffect(() => {
+    gameRef.current = game
+  }, [game])
 
   // Set initial state based on game status (pregame defaults)
   useEffect(() => {
@@ -381,13 +380,12 @@ export default function LiveGamePage({ standalone = false }) {
     if (!game?.share_code) return
 
     const ws = createWebSocket('game', game.share_code, (message) => {
-      // Controller always receives updates - showLiveIndicator only affects viewer display
+      // Controller receives updates but ignores game_time/quarter when timer is running
       if (message.type === 'game_update') {
         setGame((prev) => {
-          // Don't update game_time from WebSocket if timer is running locally
-          // This prevents the clock from jumping around
-          if (timerRunningRef.current && message.data.game_time) {
-            const { game_time, ...rest } = message.data
+          // Don't update game_time or quarter from WebSocket if timer is running locally
+          if (timerRunningRef.current) {
+            const { game_time, quarter, ...rest } = message.data
             return { ...prev, ...rest }
           }
           return { ...prev, ...message.data }
@@ -490,6 +488,7 @@ export default function LiveGamePage({ standalone = false }) {
       teamRecords,
       displayTitle,
       showDisplayTitle,
+      showPlayClock,
       showCustomMessage,
       customMessage,
       customMessageColor,
@@ -514,7 +513,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showFirstDown, showIncomplete, showOutOfBounds, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, extraInfo])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, extraInfo])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -617,17 +616,25 @@ export default function LiveGamePage({ standalone = false }) {
     const currentScore = team === 'home' ? game.home_score : game.away_score
     const newScore = Math.max(0, currentScore + delta)
     console.log('Updating score:', { field, currentScore, newScore })
-    await updateGame({ [field]: newScore })
     
     // Trigger celebration overlay for TDs, FGs, Safeties, and conversions
     if (delta === 6 || delta === 7 || delta === 8) {
-      // Touchdown (6, 7 with PAT, or 8 with 2PT)
+      // Touchdown - show celebration first, then update score after animation
       setScoreCelebration({ type: 'touchdown', team, points: delta, ...celebrationData })
-      setTimeout(() => setScoreCelebration(null), 5000)
+      setTimeout(async () => {
+        await updateGame({ [field]: newScore })
+        setScoreCelebration(null)
+      }, 5000)
     } else if (delta === 3) {
-      // Field Goal
+      // Field Goal - show celebration first, then update score after animation
       setScoreCelebration({ type: 'fieldgoal', team, points: delta, ...celebrationData })
-      setTimeout(() => setScoreCelebration(null), 5000)
+      setTimeout(async () => {
+        await updateGame({ [field]: newScore })
+        setScoreCelebration(null)
+      }, 5000)
+    } else {
+      // Other scores (PAT, etc.) - update immediately
+      await updateGame({ [field]: newScore })
     }
   }
   
@@ -862,93 +869,82 @@ export default function LiveGamePage({ standalone = false }) {
 
   function startTimer() {
     if (timerRunningRef.current) return
-    
-    // Clear any existing interval first
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
-    
     timerRunningRef.current = true
     setTimerRunning(true)
+    // Tick immediately, then schedule next
+    doGameTick()
+  }
+  
+  function doGameTick() {
+    if (!timerRunningRef.current) return
     
-    // Helper function to tick the timer - simple decrement each second
-    const tick = () => {
-      // Check if timer was stopped
-      if (!timerRunningRef.current) {
-        return
+    // Get current game state from ref (always up-to-date)
+    const currentGame = gameRef.current
+    if (!currentGame) return
+    
+    const currentSeconds = parseTime(currentGame.game_time)
+    const newSeconds = Math.max(0, currentSeconds - 1)
+    const newTime = formatTime(newSeconds)
+    
+    // Update local state
+    setGame(prev => prev ? { ...prev, game_time: newTime } : prev)
+    
+    // Handle end of clock
+    if (newSeconds <= 0) {
+      timerRunningRef.current = false
+      setTimerRunning(false)
+      api.update(gameId, { game_time: '0:00' }).catch(() => {})
+      if (['Q1', 'Q2', 'Q3'].includes(currentGame.quarter)) {
+        setGameStatus('end-quarter')
+      } else if (currentGame.quarter === 'Q4') {
+        if (currentGame.home_score === currentGame.away_score) {
+          setGameStatus('end-quarter')
+        } else {
+          api.update(gameId, { quarter: 'Final' }).catch(() => {})
+          setGameStatus('final')
+          setPossession(null)
+          setHideDownDistance(true)
+        }
+      } else if (currentGame.quarter === 'OT' || currentGame.quarter?.startsWith('OT')) {
+        setGameStatus('end-quarter')
       }
-      
-      setGame(prev => {
-        if (!prev) return prev
-        const currentSeconds = parseTime(prev.game_time)
-        const newSeconds = Math.max(0, currentSeconds - 1)
-        const newTime = formatTime(newSeconds)
-        
-        // Only update if time actually changed
-        if (prev.game_time === newTime) return prev
-        
-        if (newSeconds <= 0) {
-          stopTimer()
-          // Broadcast 0:00 to other clients
-          api.update(gameId, { game_time: '0:00' }).catch(() => {})
-          // Handle end of quarter - stay on 0:00 and show end-quarter status
-          if (['Q1', 'Q2', 'Q3'].includes(prev.quarter)) {
-            setGameStatus('end-quarter')
-          } else if (prev.quarter === 'Q4') {
-            if (prev.home_score === prev.away_score) {
-              setGameStatus('end-quarter')
-            } else {
-              api.update(gameId, { quarter: 'Final' }).catch(() => {})
-              setGameStatus('final')
-              setPossession(null)
-              setHideDownDistance(true)
-            }
-          } else if (prev.quarter === 'OT' || prev.quarter?.startsWith('OT')) {
-            setGameStatus('end-quarter')
-          }
-          return { ...prev, game_time: '0:00' }
-        }
-        
-        // Check for 2-minute warning in Q2 and Q4
-        if (newSeconds === 120 && ['Q2', 'Q4'].includes(prev.quarter)) {
-          stopTimer()
-          setShow2MinWarningPrompt(true)
-        }
-        
-        // Throttle time sync to backend (every 5 seconds max)
-        const now = Date.now()
-        if (now - lastTimeSyncRef.current >= 5000) {
-          lastTimeSyncRef.current = now
-          api.update(gameId, { game_time: newTime }).catch(() => {})
-        }
-        return { ...prev, game_time: newTime }
-      })
+      return
     }
     
-    // Tick every 1 second (we already decremented immediately above)
-    timerRef.current = setInterval(tick, 1000)
+    // Handle 2-minute warning
+    if (newSeconds === 120 && ['Q2', 'Q4'].includes(currentGame.quarter)) {
+      timerRunningRef.current = false
+      setTimerRunning(false)
+      setShow2MinWarningPrompt(true)
+      api.update(gameId, { game_time: newTime }).catch(() => {})
+      return
+    }
+    
+    // Sync time to server for live display updates
+    api.update(gameId, { game_time: newTime, quarter: currentGame.quarter }).catch(() => {})
+    
+    // Schedule next tick
+    if (timerRunningRef.current) {
+      setTimeout(doGameTick, 1000)
+    }
   }
 
   function stopTimer() {
-    // Set ref to false first to stop any pending ticks
     timerRunningRef.current = false
-    // Clear interval
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
     setTimerRunning(false)
-    
-    // Return current time for syncing
-    return game.game_time
+    return game?.game_time
   }
 
   function toggleTimer() {
     if (timerRunning) {
-      const finalTime = stopTimer()
-      // Save current time to backend
-      api.update(gameId, { game_time: finalTime }).catch(() => {})
+      stopTimer()
+      // Sync current time to server - use callback to get latest state
+      setGame(prev => {
+        if (prev) {
+          api.update(gameId, { game_time: prev.game_time }).catch(() => {})
+        }
+        return prev
+      })
     } else {
       startTimer()
     }
@@ -965,43 +961,38 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Play clock functions
   function startPlayClock(forceSeconds = null) {
-    // Clear any existing interval first
-    if (playClockRef.current) {
-      clearInterval(playClockRef.current)
-      playClockRef.current = null
-    }
-    
+    if (playClockRunningRef.current) return
+    playClockRunningRef.current = true
     setPlayClockRunning(true)
-    
-    // If forceSeconds provided, set it first
     if (forceSeconds !== null) {
       setPlayClock(forceSeconds)
     }
+    // Tick immediately
+    doPlayClockTick()
+  }
+  
+  function doPlayClockTick() {
+    if (!playClockRunningRef.current) return
     
-    // Immediately decrement by 1
-    setPlayClock(prev => Math.max(0, prev - 1))
+    setPlayClock(prev => {
+      const newSeconds = Math.max(0, prev - 1)
+      if (newSeconds <= 0) {
+        playClockRunningRef.current = false
+        setPlayClockRunning(false)
+        return 0
+      }
+      return newSeconds
+    })
     
-    const tick = () => {
-      setPlayClock(prev => {
-        const newSeconds = Math.max(0, prev - 1)
-        if (newSeconds <= 0) {
-          stopPlayClock()
-          return 0
-        }
-        return newSeconds
-      })
+    // Schedule next tick outside state update
+    if (playClockRunningRef.current) {
+      setTimeout(doPlayClockTick, 1000)
     }
-    
-    // Tick every 1 second (we already decremented immediately above)
-    playClockRef.current = setInterval(tick, 1000)
   }
 
   function stopPlayClock() {
+    playClockRunningRef.current = false
     setPlayClockRunning(false)
-    if (playClockRef.current) {
-      clearInterval(playClockRef.current)
-      playClockRef.current = null
-    }
   }
 
   function resetPlayClock(seconds = 40) {
@@ -1105,33 +1096,36 @@ export default function LiveGamePage({ standalone = false }) {
   }
 
   function startTimeoutClock(seconds) {
-    // Clear any existing timeout clock
-    if (timeoutClockRef.current) {
-      clearInterval(timeoutClockRef.current)
-    }
     setTimeoutClock(seconds)
+    setPendingTimeoutDuration(null) // Hide duration options once clock starts
+    timeoutClockRunningRef.current = true
+    // Schedule first tick after 1 second (don't tick immediately for timeout - it shows the full duration first)
+    setTimeout(doTimeoutTick, 1000)
+  }
+  
+  function doTimeoutTick() {
+    if (!timeoutClockRunningRef.current) return
     
-    timeoutClockRef.current = setInterval(() => {
-      setTimeoutClock(prev => {
-        if (prev <= 1) {
-          clearInterval(timeoutClockRef.current)
-          timeoutClockRef.current = null
-          // Reset clock to null but keep timeout display showing
-          // Show duration options again so user can extend or end
-          setPendingTimeoutDuration(timeoutTeam)
-          return null
-        }
-        return prev - 1
-      })
-    }, 1000)
+    setTimeoutClock(prev => {
+      if (prev === null || prev <= 1) {
+        timeoutClockRunningRef.current = false
+        // Auto-end timeout when timer hits 0
+        setTimeout(() => {
+          endTimeout()
+        }, 500) // Small delay so user sees 0:00
+        return 0
+      }
+      return prev - 1
+    })
+    
+    // Schedule next tick outside state update
+    if (timeoutClockRunningRef.current) {
+      setTimeout(doTimeoutTick, 1000)
+    }
   }
 
   function endTimeout() {
-    // Clear timeout clock
-    if (timeoutClockRef.current) {
-      clearInterval(timeoutClockRef.current)
-      timeoutClockRef.current = null
-    }
+    timeoutClockRunningRef.current = false
     setShowTimeoutDisplay(false)
     setTimeoutTeam(null)
     setUsedTimeoutIndex(null)
@@ -1614,6 +1608,8 @@ export default function LiveGamePage({ standalone = false }) {
     setChallengeStage(0)
     setChallengeActive(false)
     setChallengeTeam(null)
+    setReviewReason('')
+    setReviewCallOnField('')
   }
 
   function challengeReversed() {
@@ -1622,12 +1618,16 @@ export default function LiveGamePage({ standalone = false }) {
     setChallengeStage(0)
     setChallengeActive(false)
     setChallengeTeam(null)
+    setReviewReason('')
+    setReviewCallOnField('')
   }
 
   function cancelChallenge() {
     setChallengeStage(0)
     setChallengeActive(false)
     setChallengeTeam(null)
+    setReviewReason('')
+    setReviewCallOnField('')
   }
 
   function copyShareLink() {
@@ -1692,33 +1692,33 @@ export default function LiveGamePage({ standalone = false }) {
     const secs = seconds % 60
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
+  
+  const doSimpleTimerTick = () => {
+    if (!simpleTimerRunningRef.current) return
+    setSimpleTimerSeconds(prev => prev + 1)
+    
+    // Schedule next tick outside state update
+    if (simpleTimerRunningRef.current) {
+      setTimeout(doSimpleTimerTick, 1000)
+    }
+  }
 
   const toggleSimpleTimer = () => {
     if (simpleTimerRunning) {
-      clearInterval(simpleTimerRef.current)
-      simpleTimerStartRef.current = null
-      simpleTimerStartSecondsRef.current = null
+      simpleTimerRunningRef.current = false
       setSimpleTimerRunning(false)
       api.update(gameId, { timer_running: false, timer_seconds: simpleTimerSeconds })
     } else {
-      // Record start time and starting seconds for accurate elapsed calculation
-      simpleTimerStartRef.current = Date.now()
-      simpleTimerStartSecondsRef.current = simpleTimerSeconds
-      
-      simpleTimerRef.current = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - simpleTimerStartRef.current) / 1000)
-        const newVal = simpleTimerStartSecondsRef.current + elapsed
-        setSimpleTimerSeconds(newVal)
-      }, 100) // Check every 100ms for accuracy even when tab is inactive
+      simpleTimerRunningRef.current = true
       setSimpleTimerRunning(true)
       api.update(gameId, { timer_running: true })
+      // Tick immediately
+      doSimpleTimerTick()
     }
   }
 
   const resetSimpleTimer = () => {
-    clearInterval(simpleTimerRef.current)
-    simpleTimerStartRef.current = null
-    simpleTimerStartSecondsRef.current = null
+    simpleTimerRunningRef.current = false
     setSimpleTimerRunning(false)
     setSimpleTimerSeconds(0)
     api.update(gameId, { timer_running: false, timer_seconds: 0 })
@@ -3359,7 +3359,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                   {showPATAttempt === 'pat' ? 'PAT Attempt' : '2PT Conversion'}
                 </p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -3407,6 +3407,18 @@ export default function LiveGamePage({ standalone = false }) {
                   >
                     ✗ No Good
                   </Button>
+                  <Button 
+                    className="bg-purple-600 hover:bg-purple-700"
+                    onClick={() => {
+                      // Faked - close PAT attempt and resume play
+                      setShowPATAttempt(null)
+                      setPatResult(null)
+                      setHideDownDistance(false)
+                      setShowPlayClock(true)
+                    }}
+                  >
+                    🎭 Faked
+                  </Button>
                 </div>
               </div>
             )}
@@ -3417,7 +3429,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">
                   Field Goal Attempt ({fgDistance} yards)
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -3459,6 +3471,18 @@ export default function LiveGamePage({ standalone = false }) {
                     }}
                   >
                     ✗ No Good
+                  </Button>
+                  <Button 
+                    className="bg-purple-600 hover:bg-purple-700"
+                    onClick={() => {
+                      // Faked - close FG attempt and resume play
+                      setShowFGAttempt(false)
+                      setFgResult(null)
+                      setHideDownDistance(false)
+                      setShowPlayClock(true)
+                    }}
+                  >
+                    🎭 Faked
                   </Button>
                   <Button 
                     className="bg-yellow-500 hover:bg-yellow-600 text-black"
@@ -4534,29 +4558,86 @@ export default function LiveGamePage({ standalone = false }) {
                 </Button>
               )}
               
-              {/* Selected Penalties List */}
+              {/* Selected Penalties List with Enforcement Options */}
               {selectedPenalties.length > 0 && (
                 <div className="bg-yellow-100 dark:bg-yellow-900/30 rounded-lg p-3">
                   <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300 mb-2">
                     Selected ({selectedPenalties.length}):
                   </p>
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     {selectedPenalties.map((sp, idx) => (
-                      <div key={idx} className="flex items-center justify-between bg-white dark:bg-slate-800 rounded px-2 py-1">
-                        <span className="text-sm text-slate-700 dark:text-slate-300">
-                          {sp.penalty.name} on <span className="font-bold" style={{ color: sp.team === 'home' ? game.home_team.color : game.away_team.color }}>
-                            {sp.team === 'home' ? game.home_team.abbreviation : game.away_team.abbreviation}
+                      <div key={idx} className="bg-white dark:bg-slate-800 rounded px-2 py-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-slate-700 dark:text-slate-300">
+                            {sp.penalty.name} on <span className="font-bold" style={{ color: sp.team === 'home' ? game.home_team.color : game.away_team.color }}>
+                              {sp.team === 'home' ? game.home_team.abbreviation : game.away_team.abbreviation}
+                            </span>
+                            <span className="text-xs text-slate-500 ml-1">({sp.penalty.yards} yds)</span>
                           </span>
-                        </span>
-                        <button 
-                          onClick={() => removePenaltyFromSelection(idx)}
-                          className="text-red-500 hover:text-red-700 font-bold ml-2"
-                        >
-                          ✕
-                        </button>
+                          <button 
+                            onClick={() => removePenaltyFromSelection(idx)}
+                            className="text-red-500 hover:text-red-700 font-bold ml-2"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        {/* Enforcement options for each penalty */}
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                            <input 
+                              type="checkbox" 
+                              checked={sp.enforce !== false}
+                              onChange={(e) => {
+                                const updated = [...selectedPenalties]
+                                updated[idx] = { ...sp, enforce: e.target.checked }
+                                setSelectedPenalties(updated)
+                              }}
+                              className="w-3 h-3"
+                            />
+                            Enforce
+                          </label>
+                          <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                            <input 
+                              type="checkbox" 
+                              checked={sp.halfDistance === true}
+                              onChange={(e) => {
+                                const updated = [...selectedPenalties]
+                                updated[idx] = { ...sp, halfDistance: e.target.checked }
+                                setSelectedPenalties(updated)
+                              }}
+                              className="w-3 h-3"
+                            />
+                            Half the Distance
+                          </label>
+                        </div>
                       </div>
                     ))}
                   </div>
+                  {/* Quick actions for multiple penalties */}
+                  {selectedPenalties.length > 1 && (
+                    <div className="flex gap-2 mt-2 pt-2 border-t border-yellow-200 dark:border-yellow-800">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs flex-1"
+                        onClick={() => {
+                          setSelectedPenalties(selectedPenalties.map(sp => ({ ...sp, enforce: true })))
+                        }}
+                      >
+                        ✓ Enforce All
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs flex-1"
+                        onClick={() => {
+                          setSelectedPenalties(selectedPenalties.map(sp => ({ ...sp, enforce: false })))
+                        }}
+                      >
+                        ✕ Decline All
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
               
@@ -4746,6 +4827,18 @@ export default function LiveGamePage({ standalone = false }) {
                         ✗ No Good
                       </Button>
                       <Button 
+                        className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold text-sm"
+                        onClick={() => {
+                          // Faked - close PAT attempt and resume play (TD still counts)
+                          setShowPATAttempt(null)
+                          setPatResult(null)
+                          setHideDownDistance(false)
+                          setShowPlayClock(true)
+                        }}
+                      >
+                        🎭 Faked
+                      </Button>
+                      <Button 
                         variant="outline"
                         size="sm"
                         className="w-full border-amber-400 text-amber-800 text-xs"
@@ -4777,7 +4870,7 @@ export default function LiveGamePage({ standalone = false }) {
                 
                 {/* Result buttons */}
                 {!fgResult && (
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-4 gap-2">
                     <Button 
                       className="bg-green-600 hover:bg-green-700 text-white font-bold"
                       onClick={() => {
@@ -4816,6 +4909,58 @@ export default function LiveGamePage({ standalone = false }) {
                     >
                       🚫 Blocked
                     </Button>
+                    <Button 
+                      className="bg-purple-600 hover:bg-purple-700 text-white font-bold"
+                      onClick={() => {
+                        // Faked - just close the FG attempt and resume play
+                        setShowFGAttempt(false)
+                        setFgResult(null)
+                        setHideDownDistance(false)
+                        setShowPlayClock(true)
+                      }}
+                    >
+                      🎭 Faked
+                    </Button>
+                  </div>
+                )}
+                
+                {/* After FG Miss - options for what happens next */}
+                {(fgResult === 'no-good' || fgResult === 'blocked') && (
+                  <div className="space-y-2 mt-3">
+                    <p className="text-sm font-semibold text-center text-slate-600">What happens next?</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button 
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold"
+                        onClick={() => {
+                          setShowFGAttempt(false)
+                          setFgResult(null)
+                          togglePossession()
+                          setHideDownDistance(false)
+                          setShowPlayClock(true)
+                          // Set to 1st & 10 for receiving team
+                          setDown(1)
+                          setDistance(10)
+                        }}
+                      >
+                        ▶️ Continue Play
+                      </Button>
+                      <Button 
+                        className="bg-purple-600 hover:bg-purple-700 text-white font-bold"
+                        onClick={() => {
+                          setShowFGAttempt(false)
+                          setFgResult(null)
+                          togglePossession()
+                          setGameStatus('ad-break')
+                          setHideDownDistance(true)
+                          setShowPlayClock(false)
+                          // Set to 1st & 10 for receiving team
+                          setDown(1)
+                          setDistance(10)
+                        }}
+                      >
+                        📺 Ad Break
+                      </Button>
+                    </div>
                   </div>
                 )}
                 
@@ -5654,6 +5799,55 @@ export default function LiveGamePage({ standalone = false }) {
                     <span className="text-sm text-orange-700 bg-orange-200 px-2 py-1 rounded">
                       Timeout at risk
                     </span>
+                  </div>
+                  
+                  {/* Quick Buttons for Common Challenges */}
+                  <div className="flex flex-wrap gap-1">
+                    {[
+                      { reason: 'Catch/No Catch', call: 'Incomplete' },
+                      { reason: 'Catch/No Catch', call: 'Complete' },
+                      { reason: 'Fumble', call: 'Fumble' },
+                      { reason: 'Fumble', call: 'Down by Contact' },
+                      { reason: 'Spot of Ball', call: 'Short' },
+                      { reason: 'TD/No TD', call: 'Touchdown' },
+                      { reason: 'TD/No TD', call: 'No TD' },
+                      { reason: 'Pass Interference', call: 'No Flag' },
+                    ].map((item, i) => (
+                      <Button
+                        key={i}
+                        variant="outline"
+                        size="sm"
+                        className="text-xs border-orange-300 text-orange-700 hover:bg-orange-100"
+                        onClick={() => {
+                          setReviewReason(item.reason)
+                          setReviewCallOnField(item.call)
+                        }}
+                      >
+                        {item.reason}: {item.call}
+                      </Button>
+                    ))}
+                  </div>
+                  
+                  {/* Review Reason & Call on Field */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-orange-700 font-medium">Reviewing</label>
+                      <Input
+                        placeholder="e.g. Catch/No Catch"
+                        value={reviewReason}
+                        onChange={(e) => setReviewReason(e.target.value)}
+                        className="mt-1 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-orange-700 font-medium">Call on Field</label>
+                      <Input
+                        placeholder="e.g. Incomplete"
+                        value={reviewCallOnField}
+                        onChange={(e) => setReviewCallOnField(e.target.value)}
+                        className="mt-1 text-sm"
+                      />
+                    </div>
                   </div>
                   
                   {/* Result Buttons */}

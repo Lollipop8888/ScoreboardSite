@@ -1,6 +1,85 @@
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 
+// Sliding digit component - each digit slides up/down when it changes
+function SlidingDigit({ digit, direction = 'up', color, size }) {
+  const prevDigitRef = useRef(digit)
+  const [animKey, setAnimKey] = useState(0)
+  const [slideOut, setSlideOut] = useState(null)
+  
+  useEffect(() => {
+    if (digit !== prevDigitRef.current) {
+      setSlideOut({ digit: prevDigitRef.current, dir: direction })
+      prevDigitRef.current = digit
+      setAnimKey(k => k + 1)
+      
+      const timer = setTimeout(() => setSlideOut(null), 350)
+      return () => clearTimeout(timer)
+    }
+  }, [digit, direction])
+  
+  const sizeClasses = {
+    sm: 'text-2xl',
+    default: 'text-4xl',
+    lg: 'text-6xl',
+    xl: 'text-7xl',
+  }
+  
+  const heightClasses = {
+    sm: 'h-8',
+    default: 'h-12',
+    lg: 'h-16',
+    xl: 'h-20',
+  }
+  
+  const textStyle = { 
+    color: color || '#ffffff',
+    textShadow: `0 0 8px rgba(255,255,255,0.9), 0 0 16px rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.9)`,
+    WebkitTextStroke: '1.5px rgba(255,255,255,0.7)',
+    paintOrder: 'stroke fill',
+  }
+  
+  return (
+    <span 
+      className={cn(
+        "relative inline-flex items-center justify-center font-bold tabular-nums overflow-hidden",
+        sizeClasses[size] || sizeClasses.default,
+        heightClasses[size] || heightClasses.default
+      )}
+      style={{ width: '0.65em' }}
+    >
+      {/* Sliding out digit */}
+      {slideOut && (
+        <span
+          key={`out-${animKey}`}
+          className="absolute inset-0 flex items-center justify-center animate-slide-out"
+          style={{
+            ...textStyle,
+            '--slide-dir': slideOut.dir === 'up' ? '-100%' : '100%',
+          }}
+        >
+          {slideOut.digit}
+        </span>
+      )}
+      
+      {/* Current digit - slides in when changed */}
+      <span
+        key={`in-${animKey}`}
+        className={cn(
+          "flex items-center justify-center",
+          slideOut && "animate-slide-in"
+        )}
+        style={{
+          ...textStyle,
+          '--slide-dir': direction === 'up' ? '100%' : '-100%',
+        }}
+      >
+        {digit}
+      </span>
+    </span>
+  )
+}
+
 // Determine score type based on point delta
 function getScoreType(delta) {
   if (delta === 6) return 'touchdown'
@@ -69,111 +148,149 @@ export function AnimatedScore({
   score, 
   className = '', 
   color = '',
-  size = 'default' // 'sm', 'default', 'lg', 'xl'
+  size = 'default', // 'sm', 'default', 'lg', 'xl'
+  animationDelay = 0 // Delay in ms before animation starts (useful for TD celebrations)
 }) {
+  const [animKey, setAnimKey] = useState(0)
+  const [oldScore, setOldScore] = useState(score)
+  const [displayScore, setDisplayScore] = useState(score)
+  const [direction, setDirection] = useState('up')
   const [isAnimating, setIsAnimating] = useState(false)
-  const [scoreDelta, setScoreDelta] = useState(null)
-  const [scoreType, setScoreType] = useState(null)
-  const [showFireworks, setShowFireworks] = useState(false)
+  const [showDelta, setShowDelta] = useState(false)
+  const [delta, setDelta] = useState(0)
+  const [pendingScore, setPendingScore] = useState(null)
   const prevScoreRef = useRef(score)
 
   useEffect(() => {
     if (prevScoreRef.current !== score) {
-      const delta = score - prevScoreRef.current
-      const type = getScoreType(delta)
+      const scoreDelta = score - prevScoreRef.current
+      const previousScore = prevScoreRef.current
+      prevScoreRef.current = score
       
-      setScoreDelta(delta)
-      setScoreType(type)
-      setIsAnimating(true)
+      // Store pending score and keep showing old score during delay
+      setPendingScore(score)
       
-      // Show fireworks for touchdowns
-      if (type === 'touchdown' || type === 'td-pat' || type === 'td-2pt') {
-        setShowFireworks(true)
-        setTimeout(() => setShowFireworks(false), 800)
-      }
+      // Delay the animation if specified
+      const delayTimer = setTimeout(() => {
+        setOldScore(previousScore)
+        setDirection(scoreDelta > 0 ? 'up' : 'down')
+        setDelta(scoreDelta)
+        setAnimKey(k => k + 1)
+        setIsAnimating(true)
+        setShowDelta(true)
+        setDisplayScore(score)
+        setPendingScore(null)
+      }, animationDelay)
       
+      // Clear animation state after animation completes
       const timer = setTimeout(() => {
         setIsAnimating(false)
-        setScoreDelta(null)
-        setScoreType(null)
-      }, 1200)
+      }, animationDelay + 500)
       
-      prevScoreRef.current = score
-      return () => clearTimeout(timer)
+      // Hide delta popup after 1.2 seconds
+      const deltaTimer = setTimeout(() => {
+        setShowDelta(false)
+      }, animationDelay + 1200)
+      
+      return () => {
+        clearTimeout(delayTimer)
+        clearTimeout(timer)
+        clearTimeout(deltaTimer)
+      }
     }
-  }, [score])
+  }, [score, animationDelay])
 
   const sizeClasses = {
-    sm: 'text-2xl',
-    default: 'text-4xl',
-    lg: 'text-6xl',
-    xl: 'text-7xl',
+    sm: 'text-3xl',
+    default: 'text-5xl',
+    lg: 'text-7xl',
+    xl: 'text-8xl',
+  }
+  
+  const heightClasses = {
+    sm: 'h-10',
+    default: 'h-14',
+    lg: 'h-20',
+    xl: 'h-24',
+  }
+  
+  const deltaSizeClasses = {
+    sm: 'text-sm',
+    default: 'text-base',
+    lg: 'text-xl',
+    xl: 'text-2xl',
   }
 
-  const labelSizeClasses = {
-    sm: 'text-xs',
-    default: 'text-sm',
-    lg: 'text-lg',
-    xl: 'text-xl',
+  const textStyle = { 
+    color: color || '#ffffff',
+    textShadow: `0 0 8px rgba(255,255,255,0.9), 0 0 16px rgba(255,255,255,0.6), 0 0 24px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.9)`,
+    WebkitTextStroke: '2px rgba(255,255,255,0.8)',
+    paintOrder: 'stroke fill'
   }
-
-  const colors = scoreType ? getScoreColor(scoreType) : null
 
   return (
-    <div className="relative inline-block">
-      {/* Firework effects for TDs */}
-      {showFireworks && (
-        <>
-          <div 
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full rounded-full animate-firework pointer-events-none"
-            style={{ backgroundColor: colors?.glow, opacity: 0.6 }}
-          />
-          <div 
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full rounded-full animate-firework pointer-events-none"
-            style={{ backgroundColor: colors?.glow, opacity: 0.4, animationDelay: '0.1s' }}
-          />
-        </>
+    <div 
+      className={cn(
+        "relative inline-flex items-center justify-center",
+        className
       )}
-      
-      {/* Main score display */}
-      <div
+      style={{ padding: '16px 24px' }} // Padding for glow visibility (vertical and horizontal)
+    >
+      {/* Inner container with clip for slide animation */}
+      <div 
         className={cn(
-          "font-bold tabular-nums transition-all duration-200",
-          sizeClasses[size] || sizeClasses.default,
-          isAnimating && scoreType && getAnimationClass(scoreType),
-          className
+          "relative inline-flex items-center justify-center overflow-hidden",
+          heightClasses[size] || heightClasses.default
         )}
-        style={{ 
-          color: color || '#ffffff',
-          textShadow: isAnimating && colors 
-            ? `0 0 20px ${colors.glow}, 0 0 40px ${colors.glow}60` 
-            : `0 0 8px rgba(255,255,255,0.9), 0 0 16px rgba(255,255,255,0.6), 0 0 24px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.9)`,
-          WebkitTextStroke: '2px rgba(255,255,255,0.8)',
-          paintOrder: 'stroke fill'
-        }}
       >
-        {score}
+        {/* Old score sliding out - only show during animation */}
+        {isAnimating && (
+          <span
+            key={`out-${animKey}`}
+            className={cn(
+              "absolute font-bold tabular-nums",
+              sizeClasses[size] || sizeClasses.default,
+              direction === 'up' ? 'animate-slide-out-up' : 'animate-slide-out-down'
+            )}
+            style={textStyle}
+          >
+            {oldScore}
+          </span>
+        )}
+        
+        {/* Current score - slides in during animation, static otherwise */}
+        <span
+          key={`in-${animKey}`}
+          className={cn(
+            "font-bold tabular-nums",
+            sizeClasses[size] || sizeClasses.default,
+            isAnimating && (direction === 'up' ? 'animate-slide-in-up' : 'animate-slide-in-down')
+          )}
+          style={textStyle}
+        >
+          {displayScore}
+        </span>
       </div>
       
-      {/* Floating score type label */}
-      {scoreDelta !== null && scoreDelta !== 0 && scoreType && (
-        <div
+      {/* Floating +/- delta popup */}
+      {showDelta && delta !== 0 && (
+        <span
+          key={`delta-${animKey}`}
           className={cn(
-            "absolute -top-2 left-1/2 -translate-x-1/2 font-bold pointer-events-none animate-label-float whitespace-nowrap",
-            labelSizeClasses[size] || labelSizeClasses.default,
-            colors?.text
+            "absolute font-bold animate-label-float pointer-events-none",
+            deltaSizeClasses[size] || deltaSizeClasses.default,
+            delta > 0 ? 'text-green-400' : 'text-red-400'
           )}
+          style={{
+            top: '-0.5em',
+            right: '-1.5em',
+            textShadow: delta > 0 
+              ? '0 0 8px rgba(34,197,94,0.8), 0 0 16px rgba(34,197,94,0.4)' 
+              : '0 0 8px rgba(239,68,68,0.8), 0 0 16px rgba(239,68,68,0.4)'
+          }}
         >
-          {getScoreLabel(scoreType, scoreDelta)}
-        </div>
-      )}
-      
-      {/* Flash overlay with score-type-specific color */}
-      {isAnimating && colors && (
-        <div 
-          className="absolute inset-0 rounded-lg animate-score-flash pointer-events-none"
-          style={{ backgroundColor: colors.bg }}
-        />
+          {delta > 0 ? `+${delta}` : delta}
+        </span>
       )}
     </div>
   )
