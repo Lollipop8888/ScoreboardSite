@@ -34,7 +34,6 @@ export default function LeaguesPage() {
   const [editingLeague, setEditingLeague] = useState(null)
   const [formData, setFormData] = useState({
     name: '',
-    sport: 'Football',
     season: '',
   })
 
@@ -74,7 +73,7 @@ export default function LeaguesPage() {
     try {
       await leagueApi.create(formData)
       setDialogOpen(false)
-      setFormData({ name: '', sport: 'Football', season: '' })
+      setFormData({ name: '', season: '' })
       loadLeagues()
     } catch (error) {
       console.error('Failed to create league:', error)
@@ -87,7 +86,6 @@ export default function LeaguesPage() {
     setEditingLeague(league)
     setFormData({
       name: league.name,
-      sport: league.sport,
       season: league.season,
     })
     setEditDialogOpen(true)
@@ -99,7 +97,7 @@ export default function LeaguesPage() {
       await leagueApi.update(editingLeague.id, formData)
       setEditDialogOpen(false)
       setEditingLeague(null)
-      setFormData({ name: '', sport: 'Football', season: '' })
+      setFormData({ name: '', season: '' })
       loadLeagues()
     } catch (error) {
       console.error('Failed to update league:', error)

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Trophy, LayoutGrid, GitBranch, Share2, Zap, Users, Timer, Target, Search, ArrowRight, Play, Monitor, Smartphone, CheckCircle2 } from 'lucide-react'
+import { Trophy, LayoutGrid, GitBranch, Share2, Zap, Users, Timer, Target, Search, ArrowRight, Play, Monitor, Smartphone, CheckCircle2, Mail, X, Check, Eye, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { gameApi, bracketApi, scoreboardApi, leagueApi } from '@/lib/api'
+import { gameApi, bracketApi, scoreboardApi, leagueApi, inviteApi, standaloneGameApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 
 const features = [
   {
@@ -48,12 +49,14 @@ const howItWorks = [
 
 export default function HomePage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [shareCode, setShareCode] = useState('')
   const [joinError, setJoinError] = useState('')
   const [isJoining, setIsJoining] = useState(false)
   const [stats, setStats] = useState({ leagues: 0, games: 0 })
   const [demoScore, setDemoScore] = useState({ home: 24, away: 21 })
   const [demoQuarter, setDemoQuarter] = useState('Q3')
+  const [pendingInvites, setPendingInvites] = useState([])
 
   // Animate demo scoreboard - reset when scores get too high
   useEffect(() => {
@@ -85,6 +88,49 @@ export default function HomePage() {
     loadStats()
   }, [])
 
+  // Load pending invites for logged-in users
+  useEffect(() => {
+    async function loadInvites() {
+      if (!user) {
+        setPendingInvites([])
+        return
+      }
+      try {
+        const invites = await inviteApi.getPending()
+        setPendingInvites(invites || [])
+      } catch (e) {
+        console.error('Failed to load invites:', e)
+      }
+    }
+    loadInvites()
+  }, [user])
+
+  async function handleAcceptInvite(invite) {
+    try {
+      await inviteApi.respond(invite.id, 'accepted')
+      setPendingInvites(prev => prev.filter(i => i.id !== invite.id))
+      // Navigate to the resource
+      const routes = {
+        league: `/leagues/${invite.resource_id}`,
+        game: `/games/${invite.resource_id}`,
+        bracket: `/brackets/${invite.resource_id}`,
+        scoreboard: `/scoreboards/${invite.resource_id}`,
+      }
+      navigate(routes[invite.resource_type] || '/')
+    } catch (e) {
+      console.error('Failed to accept invite:', e)
+    }
+  }
+
+  async function handleDeclineInvite(invite) {
+    try {
+      await inviteApi.respond(invite.id, 'declined')
+      setPendingInvites(prev => prev.filter(i => i.id !== invite.id))
+    } catch (e) {
+      console.error('Failed to decline invite:', e)
+    }
+  }
+
   async function handleJoinDisplay(e) {
     e.preventDefault()
     if (!shareCode.trim()) return
@@ -95,6 +141,7 @@ export default function HomePage() {
     const code = shareCode.trim().toUpperCase()
     
     // Try each type and navigate to share page if found
+    // Try league games first
     try {
       const game = await gameApi.getByShareCode(code)
       if (game) {
@@ -105,6 +152,18 @@ export default function HomePage() {
       // Game not found, try next
     }
     
+    // Try standalone games
+    try {
+      const standaloneGame = await standaloneGameApi.getByShareCode(code)
+      if (standaloneGame) {
+        navigate(`/standalone/${standaloneGame.id}`)
+        return
+      }
+    } catch (e) {
+      // Standalone game not found, try next
+    }
+    
+    // Try brackets
     try {
       const bracket = await bracketApi.getByShareCode(code)
       if (bracket) {
@@ -115,6 +174,7 @@ export default function HomePage() {
       // Bracket not found, try next
     }
     
+    // Try scoreboards
     try {
       const scoreboard = await scoreboardApi.getByShareCode(code)
       if (scoreboard) {
@@ -122,7 +182,18 @@ export default function HomePage() {
         return
       }
     } catch (e) {
-      // Scoreboard not found
+      // Scoreboard not found, try next
+    }
+    
+    // Try leagues
+    try {
+      const league = await leagueApi.getByShareCode(code)
+      if (league) {
+        navigate(`/share/league/${code}`)
+        return
+      }
+    } catch (e) {
+      // League not found
     }
     
     setJoinError('No display found with that code')
@@ -131,6 +202,102 @@ export default function HomePage() {
 
   return (
     <div className="space-y-16">
+      {/* Pending Invites Banner */}
+      {pendingInvites.length > 0 && (
+        <div className="fixed top-16 left-0 right-0 z-40 bg-gradient-to-r from-blue-600 to-indigo-600 shadow-lg">
+          <div className="container mx-auto px-4 py-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 text-white">
+                <Mail className="h-5 w-5" />
+                <span className="font-medium">
+                  You have {pendingInvites.length} pending invite{pendingInvites.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => document.getElementById('invites-section')?.scrollIntoView({ behavior: 'smooth' })}
+              >
+                View Invites
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pending Invites Section */}
+      {pendingInvites.length > 0 && (
+        <section id="invites-section" className={pendingInvites.length > 0 ? 'pt-12' : ''}>
+          <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-blue-700 dark:text-blue-400">
+                <Mail className="h-5 w-5" />
+                Pending Invites
+              </CardTitle>
+              <CardDescription>You've been invited to view or control these resources</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {pendingInvites.map(invite => (
+                <div
+                  key={invite.id}
+                  className="flex items-center justify-between p-4 bg-white dark:bg-slate-800 rounded-lg border shadow-sm"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`p-2 rounded-full ${
+                      invite.resource_type === 'league' ? 'bg-amber-100 text-amber-700' :
+                      invite.resource_type === 'game' ? 'bg-green-100 text-green-700' :
+                      invite.resource_type === 'bracket' ? 'bg-purple-100 text-purple-700' :
+                      'bg-blue-100 text-blue-700'
+                    }`}>
+                      {invite.resource_type === 'league' && <Trophy className="h-5 w-5" />}
+                      {invite.resource_type === 'game' && <Play className="h-5 w-5" />}
+                      {invite.resource_type === 'bracket' && <GitBranch className="h-5 w-5" />}
+                      {invite.resource_type === 'scoreboard' && <LayoutGrid className="h-5 w-5" />}
+                    </div>
+                    <div>
+                      <p className="font-medium">
+                        {invite.resource_name || `${invite.resource_type.charAt(0).toUpperCase() + invite.resource_type.slice(1)}`}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        From <span className="font-medium text-slate-700 dark:text-slate-300">@{invite.from_username}</span>
+                        {' • '}
+                        <span className={`inline-flex items-center gap-1 ${
+                          invite.permission === 'control' ? 'text-orange-600' : 'text-blue-600'
+                        }`}>
+                          {invite.permission === 'control' ? (
+                            <><Settings className="h-3 w-3" /> Control access</>
+                          ) : (
+                            <><Eye className="h-3 w-3" /> View only</>
+                          )}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={() => handleDeclineInvite(invite)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="bg-green-600 hover:bg-green-700"
+                      onClick={() => handleAcceptInvite(invite)}
+                    >
+                      <Check className="h-4 w-4 mr-1" />
+                      Accept
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
       {/* Hero Section */}
       <section className="py-12 text-center relative overflow-hidden">
         {/* Football field background pattern */}

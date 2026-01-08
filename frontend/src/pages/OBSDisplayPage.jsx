@@ -104,6 +104,11 @@ export default function OBSDisplayPage() {
       const startedAt = new Date(game.timer_started_at)
       const now = new Date()
       const elapsedSeconds = Math.floor((now - startedAt) / 1000)
+      // Sanity check: elapsed time should be positive and reasonable
+      if (elapsedSeconds < 0 || elapsedSeconds > 86400) {
+        setLiveGameTime(null)
+        return
+      }
       const currentSeconds = Math.max(0, game.timer_started_seconds - elapsedSeconds)
       const mins = Math.floor(currentSeconds / 60)
       const secs = currentSeconds % 60

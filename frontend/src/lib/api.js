@@ -69,6 +69,30 @@ export const leagueApi = {
   getStandings: (id) => fetchApi(`/leagues/${id}/standings`),
   getGames: (id) => fetchApi(`/leagues/${id}/games`),
   getBrackets: (id) => fetchApi(`/leagues/${id}/brackets`),
+  getSeasons: (id) => fetchApi(`/leagues/${id}/seasons`),
+  getCurrentSeason: (id) => fetchApi(`/leagues/${id}/current-season`),
+};
+
+// Season API
+export const seasonApi = {
+  create: (data) => fetchApi('/seasons', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id, data) => fetchApi(`/seasons/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  end: (id) => fetchApi(`/seasons/${id}/end`, { method: 'POST' }),
+  getStandings: (id) => fetchApi(`/seasons/${id}/standings`),
+};
+
+// Record Type API
+export const recordTypeApi = {
+  getByLeague: (leagueId) => fetchApi(`/leagues/${leagueId}/record-types`),
+  create: (data) => fetchApi('/record-types', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id, data) => fetchApi(`/record-types/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id) => fetchApi(`/record-types/${id}`, { method: 'DELETE' }),
+  getTeamRecords: (leagueId, recordTypeId = null) => {
+    const url = recordTypeId 
+      ? `/leagues/${leagueId}/team-records?record_type_id=${recordTypeId}`
+      : `/leagues/${leagueId}/team-records`;
+    return fetchApi(url);
+  },
 };
 
 // Team API
@@ -220,3 +244,11 @@ export function createWebSocket(type, shareCode, onMessage) {
   
   return ws;
 }
+
+// Invite API
+export const inviteApi = {
+  send: (data) => fetchApi('/invites', { method: 'POST', body: JSON.stringify(data) }),
+  getPending: () => fetchApi('/invites/pending'),
+  respond: (id, status) => fetchApi(`/invites/${id}`, { method: 'PUT', body: JSON.stringify({ status }) }),
+  delete: (id) => fetchApi(`/invites/${id}`, { method: 'DELETE' }),
+};

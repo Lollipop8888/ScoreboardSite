@@ -50,12 +50,17 @@ class PasswordChange(BaseModel):
 # League Schemas
 class LeagueBase(BaseModel):
     name: str
-    sport: str
+    sport: str = "Football"  # Default value, field hidden from UI
     season: str
     has_groups: bool = False
     group_label_1: Optional[str] = "Conference"  # Primary group label
     group_label_2: Optional[str] = "Division"  # Secondary group label
     groups: Optional[dict] = None  # {"groups": [{"name": "AFC", "subgroups": ["North", "South"]}]}
+    game_unit_label: Optional[str] = None  # e.g., "Week", "Round", "Game Day"
+    game_unit_label_2: Optional[str] = None  # Secondary unit, e.g., "Playoff Week"
+    game_unit_label_3: Optional[str] = None  # Extra unit, e.g., "Preseason Week"
+    penalties: Optional[list] = None  # List of penalty names
+    mechanics: Optional[dict] = None  # Enabled mechanics
 
 
 class LeagueCreate(LeagueBase):
@@ -71,6 +76,11 @@ class LeagueUpdate(BaseModel):
     group_label_2: Optional[str] = None
     groups: Optional[dict] = None
     is_finished: Optional[bool] = None
+    game_unit_label: Optional[str] = None
+    game_unit_label_2: Optional[str] = None
+    game_unit_label_3: Optional[str] = None
+    penalties: Optional[list] = None
+    mechanics: Optional[dict] = None
 
 
 class League(LeagueBase):
@@ -78,9 +88,114 @@ class League(LeagueBase):
     owner_id: Optional[str] = None
     share_code: str
     groups: Optional[str] = None  # Stored as JSON string in DB
+    penalties: Optional[str] = None  # Stored as JSON string in DB
+    mechanics: Optional[str] = None  # Stored as JSON string in DB
     is_finished: bool = False
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Season Schemas
+class SeasonBase(BaseModel):
+    name: str  # e.g., "2025-26", "Spring 2025"
+
+
+class SeasonCreate(SeasonBase):
+    league_id: str
+
+
+class SeasonUpdate(BaseModel):
+    name: Optional[str] = None
+    is_current: Optional[bool] = None
+    is_finished: Optional[bool] = None
+
+
+class Season(SeasonBase):
+    id: str
+    league_id: str
+    is_current: bool
+    is_finished: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# TeamSeasonStats Schemas
+class TeamSeasonStatsBase(BaseModel):
+    wins: int = 0
+    losses: int = 0
+    ties: int = 0
+    points_for: int = 0
+    points_against: int = 0
+
+
+class TeamSeasonStats(TeamSeasonStatsBase):
+    id: str
+    team_id: str
+    season_id: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# RecordType Schemas
+class RecordTypeBase(BaseModel):
+    name: str  # e.g., "Overall", "Conference", "Division"
+
+
+class RecordTypeCreate(RecordTypeBase):
+    league_id: str
+
+
+class RecordTypeUpdate(BaseModel):
+    name: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class RecordType(RecordTypeBase):
+    id: str
+    league_id: str
+    is_main: bool
+    sort_order: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# TeamRecord Schemas
+class TeamRecordBase(BaseModel):
+    wins: int = 0
+    losses: int = 0
+    ties: int = 0
+    points_for: int = 0
+    points_against: int = 0
+
+
+class TeamRecordCreate(TeamRecordBase):
+    team_id: str
+    record_type_id: str
+
+
+class TeamRecordUpdate(BaseModel):
+    wins: Optional[int] = None
+    losses: Optional[int] = None
+    ties: Optional[int] = None
+    points_for: Optional[int] = None
+    points_against: Optional[int] = None
+
+
+class TeamRecord(TeamRecordBase):
+    id: str
+    team_id: str
+    record_type_id: str
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -145,10 +260,16 @@ class GameBase(BaseModel):
     home_team_id: str
     away_team_id: str
     scheduled_at: Optional[datetime] = None
+    time_tbd: Optional[bool] = False  # True if time is TBD (only date is set)
+    game_unit: Optional[int] = None  # e.g., 1 for "Week 1"
+    game_unit_type: Optional[int] = 1  # 1=primary, 2=secondary, 3=extra
+    record_type_id: Optional[str] = None  # Which record this game counts towards (null = main)
+    counts_towards_record: Optional[bool] = True  # If false, game doesn't affect any record
 
 
 class GameCreate(GameBase):
     league_id: str
+    season_id: Optional[str] = None  # Will be auto-set to current season if not provided
 
 
 class GameUpdate(BaseModel):
@@ -160,6 +281,11 @@ class GameUpdate(BaseModel):
     quarter: Optional[str] = None
     game_time: Optional[str] = None
     scheduled_at: Optional[datetime] = None
+    time_tbd: Optional[bool] = None
+    game_unit: Optional[int] = None
+    game_unit_type: Optional[int] = None
+    record_type_id: Optional[str] = None
+    counts_towards_record: Optional[bool] = None
     down: Optional[int] = None
     distance: Optional[int] = None
     ball_on: Optional[int] = None
@@ -176,6 +302,7 @@ class GameUpdate(BaseModel):
 class GameWithTeams(BaseModel):
     id: str
     league_id: str
+    season_id: Optional[str] = None
     home_team: Team
     away_team: Team
     home_score: int
@@ -184,6 +311,11 @@ class GameWithTeams(BaseModel):
     quarter: Optional[str]
     game_time: Optional[str]
     scheduled_at: Optional[datetime]
+    time_tbd: Optional[bool] = False
+    game_unit: Optional[int] = None
+    game_unit_type: Optional[int] = 1
+    record_type_id: Optional[str] = None
+    counts_towards_record: Optional[bool] = True
     share_code: str
     down: Optional[int] = 1
     distance: Optional[int] = 10
@@ -226,6 +358,7 @@ class BracketUpdate(BaseModel):
     bottom_bracket_name: Optional[str] = None
     is_playoff: Optional[bool] = None
     playoff_picture: Optional[list] = None  # Playoff picture data (array of team entries)
+    is_finalized: Optional[bool] = None  # Lock editing of playoff picture
     finals_logo_url: Optional[str] = None  # Optional logo for finals round
 
 
@@ -273,6 +406,7 @@ class Bracket(BaseModel):
     bottom_bracket_name: Optional[str] = "Bottom Bracket"
     is_playoff: bool = False
     playoff_picture: Optional[str] = None  # Stored as JSON string in DB
+    is_finalized: bool = False  # Lock editing of playoff picture
     finals_logo_url: Optional[str] = None  # Optional logo for finals round
     share_code: str
     matches: List[BracketMatch] = []
@@ -437,6 +571,35 @@ class StandaloneGame(BaseModel):
     timer_running: bool = False
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Invite Schemas
+class InviteCreate(BaseModel):
+    to_username: str
+    resource_type: str  # 'league', 'game', 'bracket', 'scoreboard'
+    resource_id: str
+    resource_name: Optional[str] = None
+    permission: str = "view"  # 'view' or 'control'
+
+
+class InviteUpdate(BaseModel):
+    status: str  # 'accepted' or 'declined'
+
+
+class InviteResponse(BaseModel):
+    id: str
+    from_user_id: str
+    from_username: str
+    to_user_id: str
+    resource_type: str
+    resource_id: str
+    resource_name: Optional[str]
+    permission: str
+    status: str
+    created_at: datetime
 
     class Config:
         from_attributes = True

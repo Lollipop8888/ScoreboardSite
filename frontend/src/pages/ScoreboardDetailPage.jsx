@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Minus, Share2, Trash2, Copy, Check, RotateCcw, Settings, Trophy, ArrowUpDown, Pencil, Upload } from 'lucide-react'
+import { Plus, Minus, Share2, Trash2, Copy, Check, RotateCcw, Settings, Trophy, ArrowUpDown, Pencil, Upload, Send, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -15,7 +15,15 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { scoreboardApi, createWebSocket } from '@/lib/api'
+import { scoreboardApi, createWebSocket, inviteApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 // Football scoring options
 const SCORING_OPTIONS = [
@@ -42,6 +50,7 @@ const PRESET_COLORS = [
 
 export default function ScoreboardDetailPage() {
   const { scoreboardId } = useParams()
+  const { user } = useAuth()
   const [scoreboard, setScoreboard] = useState(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -55,6 +64,10 @@ export default function ScoreboardDetailPage() {
   const [editPlayerForm, setEditPlayerForm] = useState({ name: '', color: '#DC2626' })
   const [scoreboardForm, setScoreboardForm] = useState({ name: '', description: '' })
   const [customIncrement, setCustomIncrement] = useState(1)
+  const [inviteUsername, setInviteUsername] = useState('')
+  const [invitePermission, setInvitePermission] = useState('view')
+  const [inviteError, setInviteError] = useState('')
+  const [inviteSuccess, setInviteSuccess] = useState('')
 
   const loadScoreboard = useCallback(async () => {
     try {
@@ -210,6 +223,28 @@ export default function ScoreboardDetailPage() {
     })
   }
 
+  async function handleSendInvite() {
+    if (!inviteUsername.trim()) {
+      setInviteError('Please enter a username')
+      return
+    }
+    setInviteError('')
+    setInviteSuccess('')
+    try {
+      await inviteApi.send({
+        to_username: inviteUsername.trim(),
+        resource_type: 'scoreboard',
+        resource_id: scoreboardId,
+        resource_name: scoreboard?.name || 'Scoreboard',
+        permission: invitePermission,
+      })
+      setInviteSuccess(`Invite sent to @${inviteUsername.trim()}!`)
+      setInviteUsername('')
+    } catch (e) {
+      setInviteError(e.message || 'Failed to send invite')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -332,22 +367,70 @@ export default function ScoreboardDetailPage() {
       </div>
 
       {/* Share Code Banner */}
-      <Card className="bg-gradient-to-r from-green-50 to-emerald-50 border-green-200">
-        <CardContent className="flex flex-col sm:flex-row items-center justify-between py-4 gap-4">
-          <div className="flex items-center gap-3">
-            <div className="bg-green-100 p-2 rounded-full">
-              <Share2 className="h-5 w-5 text-green-700" />
+      <Card className="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950/30 dark:to-emerald-950/30 border-green-200 dark:border-green-800">
+        <CardContent className="py-4 space-y-4">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-green-100 dark:bg-green-900 p-2 rounded-full">
+                <Share2 className="h-5 w-5 text-green-700 dark:text-green-400" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Share this scoreboard</p>
+                <p className="text-2xl font-bold tracking-wider text-green-700 dark:text-green-400">{scoreboard.share_code}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Share this scoreboard</p>
-              <p className="text-2xl font-bold tracking-wider text-green-700">{scoreboard.share_code}</p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={copyShareLink} className="border-green-600 text-green-700 dark:text-green-400">
+                {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+                {copied ? 'Copied!' : 'Copy Link'}
+              </Button>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={copyShareLink} className="border-green-600 text-green-700">
-              Copy Link
-            </Button>
-          </div>
+
+          {/* Invite by Username */}
+          {user && (
+            <div className="pt-4 border-t border-green-200 dark:border-green-800 space-y-3">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                <Send className="h-4 w-4" />
+                Invite by Username
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Enter username"
+                  value={inviteUsername}
+                  onChange={(e) => setInviteUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendInvite()}
+                  className="flex-1"
+                />
+                <Select value={invitePermission} onValueChange={setInvitePermission}>
+                  <SelectTrigger className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="view">
+                      <span className="flex items-center gap-1">
+                        <Eye className="h-3 w-3" /> View
+                      </span>
+                    </SelectItem>
+                    <SelectItem value="control">
+                      <span className="flex items-center gap-1">
+                        <Settings className="h-3 w-3" /> Control
+                      </span>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button onClick={handleSendInvite} size="icon" className="bg-green-600 hover:bg-green-700">
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
+              {inviteError && (
+                <p className="text-sm text-red-500">{inviteError}</p>
+              )}
+              {inviteSuccess && (
+                <p className="text-sm text-green-600">{inviteSuccess}</p>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -57,7 +57,7 @@ export function GameScoreboardDisplay({
   teamRecords,
   displayTitle,
   showDisplayTitle,
-  showPlayClock = true,
+  showPlayClock,
   showCustomMessage,
   customMessage,
   customMessageColor,
@@ -65,6 +65,8 @@ export function GameScoreboardDisplay({
   showKickoffChoice,
   injuryTeam,
   extraInfo,
+  hidePossession,
+  hideClock,
 }) {
   const homeTeam = game.home_team || { name: 'Home', abbreviation: 'HME', color: '#3B82F6' }
   const awayTeam = game.away_team || { name: 'Away', abbreviation: 'AWY', color: '#6B7280' }
@@ -121,6 +123,8 @@ export function GameScoreboardDisplay({
   injuryTeam = injuryTeam ?? displayState?.injuryTeam ?? null
   extraInfo = extraInfo ?? displayState?.extraInfo ?? { show: false, side: 'away', lines: [{ text: '', fontSize: 'md' }], bgColor: '#3b82f6', textColor: '#ffffff' }
   showPlayClock = showPlayClock ?? displayState?.showPlayClock ?? true
+  hidePossession = hidePossession ?? displayState?.hidePossession ?? false
+  hideClock = hideClock ?? displayState?.hideClock ?? false
 
   // Delayed D&D space removal - after 3 seconds of being hidden, remove the space entirely
   const [removeDownDistanceSpace, setRemoveDownDistanceSpace] = useState(false)
@@ -355,75 +359,89 @@ export function GameScoreboardDisplay({
         </div>
       )}
       
-      {/* FIELD GOAL Celebration Overlay - covers D&D and clock area only */}
+      {/* FIELD GOAL Celebration Overlay - covers center area only, not logos */}
       {scoreCelebration?.type === 'fieldgoal' && (
         <div 
-          className="absolute inset-x-4 top-2 bottom-[140px] flex items-center justify-center rounded-xl z-20 animate-bounce-in overflow-hidden"
+          className="absolute left-[15%] right-[15%] top-12 bottom-[140px] flex items-center justify-center rounded-2xl z-20 animate-bounce-in overflow-hidden"
           style={{
-            background: `linear-gradient(135deg, ${
+            background: `linear-gradient(145deg, ${
               scoreCelebration.team === 'home' ? homeTeam.color : awayTeam.color
             } 0%, ${
               scoreCelebration.team === 'home' ? (homeTeam.color2 || homeTeam.color) : (awayTeam.color2 || awayTeam.color)
+            } 50%, ${
+              scoreCelebration.team === 'home' ? (homeTeam.color3 || homeTeam.color) : (awayTeam.color3 || awayTeam.color)
             } 100%)`,
-            boxShadow: `inset 0 0 60px rgba(255,255,255,0.15), 0 0 40px ${scoreCelebration.team === 'home' ? homeTeam.color : awayTeam.color}60`
+            boxShadow: `inset 0 0 80px rgba(255,255,255,0.2), 0 0 50px ${scoreCelebration.team === 'home' ? homeTeam.color : awayTeam.color}70, 0 8px 32px rgba(0,0,0,0.3)`
           }}
         >
           {/* Animated shimmer overlay */}
           <div 
-            className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer"
+            className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"
             style={{ backgroundSize: '200% 100%' }}
           />
           {/* Radial glow effect */}
           <div 
-            className="absolute inset-0 opacity-40"
+            className="absolute inset-0 opacity-50"
             style={{
-              background: `radial-gradient(circle at center, rgba(255,255,255,0.3) 0%, transparent 60%)`
+              background: `radial-gradient(circle at center, rgba(255,255,255,0.4) 0%, transparent 70%)`
             }}
           />
-          <div className="text-center px-3 py-2 relative z-10">
-            <div className="text-3xl mb-0.5 animate-bounce drop-shadow-lg">🥅</div>
+          {/* Goal post uprights effect */}
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 flex gap-8">
+            <div className="w-1.5 h-8 bg-yellow-400/60 rounded-b-full shadow-lg" style={{ boxShadow: '0 0 10px rgba(250,204,21,0.5)' }} />
+            <div className="w-1.5 h-8 bg-yellow-400/60 rounded-b-full shadow-lg" style={{ boxShadow: '0 0 10px rgba(250,204,21,0.5)' }} />
+          </div>
+          <div className="text-center px-4 py-3 relative z-10">
+            {/* Football going through uprights animation */}
+            <div className="relative mb-2">
+              <div className="text-4xl animate-bounce drop-shadow-lg" style={{ animation: 'bounce 0.6s ease-in-out infinite' }}>🏈</div>
+              <div className="absolute -top-1 left-1/2 -translate-x-1/2 text-2xl opacity-80" style={{ animation: 'pulse 1s ease-in-out infinite' }}>✨</div>
+            </div>
             <p 
-              className="text-2xl font-black text-white tracking-wider mb-0.5 drop-shadow-lg"
+              className="text-3xl font-black text-white tracking-wider mb-1 drop-shadow-lg uppercase"
               style={{
-                textShadow: '0 0 15px rgba(255,255,255,0.7), 0 0 30px rgba(255,255,255,0.3), 0 3px 6px rgba(0,0,0,0.5)'
+                textShadow: '0 0 20px rgba(255,255,255,0.8), 0 0 40px rgba(255,255,255,0.4), 0 4px 8px rgba(0,0,0,0.5)',
+                animation: 'pulse 1.5s ease-in-out infinite'
               }}
             >
-              FIELD GOAL!
+              It's Good!
             </p>
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex items-center justify-center gap-2 mb-1">
               {scoreCelebration.team === 'home' ? (
                 homeTeam.logo_url ? (
-                  <img src={homeTeam.logo_url} alt="" className="h-6 w-auto max-w-10 object-contain drop-shadow-lg" />
+                  <img src={homeTeam.logo_url} alt="" className="h-8 w-auto max-w-12 object-contain drop-shadow-lg" />
                 ) : (
-                  <span className="text-sm font-bold text-white" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
+                  <span className="text-lg font-bold text-white" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
                     {homeTeam.abbreviation}
                   </span>
                 )
               ) : (
                 awayTeam.logo_url ? (
-                  <img src={awayTeam.logo_url} alt="" className="h-6 w-auto max-w-10 object-contain drop-shadow-lg" />
+                  <img src={awayTeam.logo_url} alt="" className="h-8 w-auto max-w-12 object-contain drop-shadow-lg" />
                 ) : (
-                  <span className="text-sm font-bold text-white" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
+                  <span className="text-lg font-bold text-white" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
                     {awayTeam.abbreviation}
                   </span>
                 )
               )}
-              <span className="text-base font-bold text-white drop-shadow-lg">
+              <span className="text-lg font-bold text-white drop-shadow-lg">
                 {scoreCelebration.team === 'home' ? homeTeam.name : awayTeam.name}
               </span>
             </div>
             {scoreCelebration.distance && (
-              <p className="text-base text-white mt-0.5 font-bold drop-shadow-lg">
-                {scoreCelebration.distance} YARDS
+              <p className="text-xl text-white font-black drop-shadow-lg" style={{ textShadow: '0 0 10px rgba(255,255,255,0.5)' }}>
+                {scoreCelebration.distance} YARD FIELD GOAL
               </p>
             )}
-            <p className="text-sm text-white/90 font-semibold drop-shadow">+3 points</p>
+            <p className="text-base text-white/90 font-bold mt-1 drop-shadow">+3 points</p>
           </div>
           {/* Floating celebration elements */}
-          <div className="absolute top-1 left-2 text-lg animate-bounce drop-shadow-lg">✨</div>
-          <div className="absolute top-1 right-2 text-lg animate-bounce drop-shadow-lg" style={{ animationDelay: '0.15s' }}>⭐</div>
-          <div className="absolute bottom-1 left-3 text-lg animate-bounce drop-shadow-lg" style={{ animationDelay: '0.2s' }}>🏈</div>
-          <div className="absolute bottom-1 right-3 text-lg animate-bounce drop-shadow-lg" style={{ animationDelay: '0.25s' }}>✨</div>
+          <div className="absolute top-2 left-3 text-xl animate-bounce drop-shadow-lg">🎉</div>
+          <div className="absolute top-3 right-4 text-lg animate-bounce drop-shadow-lg" style={{ animationDelay: '0.1s' }}>✨</div>
+          <div className="absolute bottom-2 left-4 text-lg animate-bounce drop-shadow-lg" style={{ animationDelay: '0.2s' }}>⭐</div>
+          <div className="absolute bottom-3 right-3 text-xl animate-bounce drop-shadow-lg" style={{ animationDelay: '0.15s' }}>🎊</div>
+          <div className="absolute top-1/2 left-1 text-sm animate-pulse drop-shadow-lg" style={{ animationDelay: '0.25s' }}>✨</div>
+          <div className="absolute top-1/2 right-1 text-sm animate-pulse drop-shadow-lg" style={{ animationDelay: '0.3s' }}>✨</div>
         </div>
       )}
       
@@ -1021,7 +1039,7 @@ export function GameScoreboardDisplay({
         }`}
         style={{ margin: '0 auto' }}
       >
-        <div className={`flex items-center justify-center gap-2 rounded-xl py-2.5 px-5 transition-all duration-700 backdrop-blur-sm relative overflow-hidden ${
+        <div className={`flex items-center justify-center gap-2 rounded-xl py-2.5 px-5 transition-all duration-100 backdrop-blur-sm relative overflow-hidden ${
           hideDownDistance 
             ? 'bg-slate-800/60 border border-slate-700/50' 
             : showFirstDown 
@@ -1041,7 +1059,7 @@ export function GameScoreboardDisplay({
                           : down === 4
                             ? 'bg-gradient-to-r from-red-900/40 via-red-800/30 to-red-900/40 border border-red-700/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]'
                             : (down === 3 && distance >= 5)
-                              ? 'bg-gradient-to-r from-yellow-700/10 via-yellow-600/8 to-yellow-700/10 border border-yellow-500/15'
+                              ? 'bg-gradient-to-r from-yellow-700/15 via-amber-600/12 to-yellow-700/15 border border-yellow-600/25'
                               : 'bg-slate-800/60 border border-slate-700/50'
         }`}>
           {/* Animated shimmer effect for special states */}
@@ -1107,17 +1125,17 @@ export function GameScoreboardDisplay({
               } ${
                 flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
                   ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
-                  : possession === 'away' ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
+                  : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
               }`}
             />
           ) : (
             <div 
               className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
-                hideDownDistance ? 'h-24' : 'h-16'
+                hideDownDistance ? 'w-24 h-24' : 'w-16 h-16'
               } ${
                 flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
                   ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
-                  : possession === 'away' ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
+                  : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
               }`}
             >
               <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: awayTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>
@@ -1129,14 +1147,14 @@ export function GameScoreboardDisplay({
           {showRecords && teamRecords?.away && (
             <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.away)}</p>
           )}
-          {possession === 'away' && (
+          {possession === 'away' && !hidePossession && (
             <div className="flex items-center justify-center gap-1.5 mt-1">
               <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
             </div>
           )}
           {!hideScore && (
             <div className="mt-2 py-2 overflow-visible transition-all duration-500">
-              <AnimatedScore score={game.away_score} color={awayTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={scoreCelebration ? 800 : 0} />
+              <AnimatedScore score={game.away_score} color={awayTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
             </div>
           )}
           {/* Timeouts - shrink/expand animation for hide/show */}
@@ -1217,14 +1235,13 @@ export function GameScoreboardDisplay({
             </div>
           ) : (
             <>
-              {/* Timeout clock above game clock with progress on TO markers */}
+              {/* Timeout clock above game clock with single progress bar */}
               {showTimeoutDisplay && timeoutClock !== null && (() => {
                 const team = timeoutTeam === 'home' ? homeTeam : awayTeam
-                const remainingTimeouts = timeoutTeam === 'home' ? homeTimeouts : awayTimeouts
                 const maxTimeout = 60 // Assume 60 second timeout max
                 const progress = Math.min(100, (timeoutClock / maxTimeout) * 100)
                 return (
-                  <div className="mb-2 w-full max-w-[200px] mx-auto">
+                  <div className="mb-2 w-full max-w-[180px] mx-auto">
                     <div className="flex items-center justify-center gap-2 mb-1.5">
                       <span className="text-amber-400 text-lg font-mono font-bold drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]">
                         {Math.floor(timeoutClock / 60)}:{(timeoutClock % 60).toString().padStart(2, '0')}
@@ -1233,52 +1250,27 @@ export function GameScoreboardDisplay({
                         {timeoutTeam === 'home' ? homeTeam.abbreviation : awayTeam.abbreviation} TO
                       </span>
                     </div>
-                    {/* Progress bar integrated with 3 timeout markers */}
-                    <div className="flex justify-center gap-1.5">
-                      {[1, 2, 3].map((t) => {
-                        const isActive = t <= remainingTimeouts
-                        // Calculate fill for this marker based on progress
-                        // Each marker represents 33.33% of the total
-                        const markerStart = ((t - 1) / 3) * 100
-                        const markerEnd = (t / 3) * 100
-                        let fillPercent = 0
-                        if (progress >= markerEnd) {
-                          fillPercent = 100
-                        } else if (progress > markerStart) {
-                          fillPercent = ((progress - markerStart) / (markerEnd - markerStart)) * 100
-                        }
-                        
-                        return (
-                          <div 
-                            key={t}
-                            className={`w-10 h-3 rounded-full overflow-hidden relative ${
-                              isActive ? 'bg-slate-600/50' : 'bg-slate-800/30'
-                            }`}
-                          >
-                            {isActive && (
-                              <div 
-                                className="h-full rounded-full transition-all duration-1000 ease-linear relative overflow-hidden"
-                                style={{ 
-                                  width: `${fillPercent}%`,
-                                  background: `linear-gradient(90deg, ${team.color || '#f59e0b'} 0%, ${team.color2 || team.color || '#fbbf24'} 100%)`,
-                                  boxShadow: fillPercent > 0 ? `0 0 8px ${team.color || '#f59e0b'}80` : 'none'
-                                }}
-                              >
-                                {/* Shimmer effect */}
-                                <div 
-                                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent animate-shimmer"
-                                  style={{ backgroundSize: '200% 100%' }}
-                                />
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
+                    {/* Single continuous progress bar */}
+                    <div className="w-full h-2.5 rounded-full overflow-hidden bg-slate-600/50">
+                      <div 
+                        className="h-full rounded-full transition-all duration-1000 ease-linear relative overflow-hidden"
+                        style={{ 
+                          width: `${progress}%`,
+                          background: `linear-gradient(90deg, ${team.color || '#f59e0b'} 0%, ${team.color2 || team.color || '#fbbf24'} 100%)`,
+                          boxShadow: progress > 0 ? `0 0 8px ${team.color || '#f59e0b'}80` : 'none'
+                        }}
+                      >
+                        {/* Shimmer effect */}
+                        <div 
+                          className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent animate-shimmer"
+                          style={{ backgroundSize: '200% 100%' }}
+                        />
+                      </div>
                     </div>
                   </div>
                 )
               })()}
-              <div className="flex items-center justify-center gap-3">
+              <div className={`flex items-center justify-center gap-3 transition-all duration-300 ${hideClock ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'}`}>
                 <span className="text-slate-500 text-lg font-bold uppercase tracking-wider">{game.quarter}</span>
                 <span className={`text-4xl font-mono font-black tracking-tight ${
                   game.game_time === '0:00' 
@@ -1320,7 +1312,7 @@ export function GameScoreboardDisplay({
               } ${
                 flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
                   ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
-                  : possession === 'home' ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
+                  : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
               }`}
             />
           ) : (
@@ -1330,7 +1322,7 @@ export function GameScoreboardDisplay({
               } ${
                 flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
                   ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
-                  : possession === 'home' ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
+                  : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
               }`}
             >
               <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: homeTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>
@@ -1342,14 +1334,14 @@ export function GameScoreboardDisplay({
           {showRecords && teamRecords?.home && (
             <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.home)}</p>
           )}
-          {possession === 'home' && (
+          {possession === 'home' && !hidePossession && (
             <div className="flex items-center justify-center gap-1.5 mt-1">
               <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
             </div>
           )}
           {!hideScore && (
             <div className="mt-2 py-2 overflow-visible transition-all duration-500">
-              <AnimatedScore score={game.home_score} color={homeTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={scoreCelebration ? 800 : 0} />
+              <AnimatedScore score={game.home_score} color={homeTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
             </div>
           )}
           {/* Timeouts - shrink/expand animation for hide/show */}

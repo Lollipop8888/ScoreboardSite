@@ -914,20 +914,25 @@ export default function BracketPage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <div className="flex items-center gap-2">
               <CardTitle className="text-lg">Playoff Picture</CardTitle>
-              {isDraft && (
+              {bracket?.is_finalized && (
+                <span className="px-2 py-1 text-xs font-bold bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300 rounded">
+                  🔒 FINALIZED
+                </span>
+              )}
+              {isDraft && !bracket?.is_finalized && (
                 <span className="px-2 py-1 text-xs font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300 rounded">
                   DRAFT
                 </span>
               )}
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => generatePlayoffPicture(leagueTeams)}>
+              <Button variant="outline" size="sm" onClick={() => generatePlayoffPicture(leagueTeams)} disabled={bracket?.is_finalized}>
                 🔄 Auto-Rank
               </Button>
-              <Button variant="outline" size="sm" onClick={populateBracketFromClinched}>
+              <Button variant="outline" size="sm" onClick={populateBracketFromClinched} disabled={bracket?.is_finalized}>
                 🏆 Seed Bracket
               </Button>
-              <Button variant="outline" size="sm" onClick={saveDraft}>
+              <Button variant="outline" size="sm" onClick={saveDraft} disabled={bracket?.is_finalized}>
                 📝 Save Draft
               </Button>
               {isDraft && (
@@ -935,9 +940,46 @@ export default function BracketPage() {
                   ✗ Discard
                 </Button>
               )}
-              <Button size="sm" onClick={savePlayoffPicture}>
-                💾 Publish
+              <Button size="sm" onClick={savePlayoffPicture} disabled={bracket?.is_finalized}>
+                💾 Save
               </Button>
+              {/* Finalize button - only enabled when all teams are clinched or eliminated */}
+              {(() => {
+                const allDecided = playoffPicture.length > 0 && playoffPicture.every(
+                  entry => entry.status === 'clinched' || entry.status === 'eliminated'
+                )
+                return (
+                  <Button 
+                    size="sm" 
+                    variant={bracket?.is_finalized ? "outline" : "default"}
+                    className={bracket?.is_finalized ? "bg-green-100 text-green-700 border-green-300 hover:bg-green-200" : ""}
+                    disabled={!allDecided && !bracket?.is_finalized}
+                    onClick={async () => {
+                      if (bracket?.is_finalized) {
+                        if (confirm('Unlock playoff picture for editing?')) {
+                          try {
+                            await bracketApi.update(bracket.id, { is_finalized: false })
+                            loadBracket()
+                          } catch (err) {
+                            console.error('Failed to unlock:', err)
+                          }
+                        }
+                      } else {
+                        if (confirm('Finalize playoff picture? This will lock editing until you unlock it.')) {
+                          try {
+                            await bracketApi.update(bracket.id, { is_finalized: true })
+                            loadBracket()
+                          } catch (err) {
+                            console.error('Failed to finalize:', err)
+                          }
+                        }
+                      }
+                    }}
+                  >
+                    {bracket?.is_finalized ? '🔓 Unlock' : '🔒 Finalize'}
+                  </Button>
+                )
+              })()}
             </div>
           </CardHeader>
           <CardContent>
@@ -979,6 +1021,7 @@ export default function BracketPage() {
                               <Select
                                 value={String(entry.seed)}
                                 onValueChange={(val) => updatePlayoffSeed(entry.team_id, parseInt(val))}
+                                disabled={bracket?.is_finalized}
                               >
                                 <SelectTrigger className="w-20 h-8 text-sm font-bold">
                                   <SelectValue />
@@ -1011,6 +1054,7 @@ export default function BracketPage() {
                             <Select
                               value={entry.status}
                               onValueChange={(val) => updatePlayoffStatus(entry.team_id, val)}
+                              disabled={bracket?.is_finalized}
                             >
                               <SelectTrigger className="w-36 h-8 text-xs">
                                 <SelectValue />
@@ -1022,14 +1066,16 @@ export default function BracketPage() {
                                 <SelectItem value="eliminated">✗ Eliminated</SelectItem>
                               </SelectContent>
                             </Select>
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="h-8 w-8 text-red-500"
-                              onClick={() => removeFromPlayoffPicture(entry.team_id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            {!bracket?.is_finalized && (
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="h-8 w-8 text-red-500"
+                                onClick={() => removeFromPlayoffPicture(entry.team_id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
                           </div>
                         )
                       })}
@@ -1040,7 +1086,7 @@ export default function BracketPage() {
             })()}
             
             {/* Add team to playoff picture */}
-            {leagueTeams.filter(t => !playoffPicture.find(p => p.team_id === t.id)).length > 0 && (
+            {!bracket?.is_finalized && leagueTeams.filter(t => !playoffPicture.find(p => p.team_id === t.id)).length > 0 && (
               <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
                 <Label className="text-sm text-slate-500 dark:text-slate-400">Add Team to Playoff Picture</Label>
                 <div className="flex gap-2 mt-2 flex-wrap">

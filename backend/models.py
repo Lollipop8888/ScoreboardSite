@@ -40,6 +40,11 @@ class League(Base):
     group_label_1 = Column(String(50), default="Conference")  # Primary group label (e.g., "Conference", "Section")
     group_label_2 = Column(String(50), default="Division")  # Secondary group label (e.g., "Division", "Section")
     groups = Column(Text)  # JSON: {"conferences": [{"name": "AFC", "divisions": ["North", "South"]}]}
+    game_unit_label = Column(String(50))  # e.g., "Week", "Round", "Game Day"
+    game_unit_label_2 = Column(String(50))  # Secondary unit, e.g., "Playoff Week"
+    game_unit_label_3 = Column(String(50))  # Extra unit, e.g., "Preseason Week"
+    penalties = Column(Text)  # JSON array of penalty names, e.g., ["Holding", "False Start", "Offsides"]
+    mechanics = Column(Text)  # JSON object of enabled mechanics, e.g., {"downs": true, "play_clock": true}
     is_finished = Column(Boolean, default=False)  # Whether league is finished (locks editing)
     share_code = Column(String(8), unique=True, default=generate_share_code, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -47,8 +52,77 @@ class League(Base):
 
     owner = relationship("User", back_populates="leagues")
     teams = relationship("Team", back_populates="league", cascade="all, delete-orphan")
+    seasons = relationship("Season", back_populates="league", cascade="all, delete-orphan")
     games = relationship("Game", back_populates="league", cascade="all, delete-orphan")
     brackets = relationship("Bracket", back_populates="league", cascade="all, delete-orphan")
+    record_types = relationship("RecordType", back_populates="league", cascade="all, delete-orphan")
+
+
+class Season(Base):
+    __tablename__ = "seasons"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)  # e.g., "2025-26", "Spring 2025"
+    is_current = Column(Boolean, default=True)  # Only one season per league should be current
+    is_finished = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    league = relationship("League", back_populates="seasons")
+    games = relationship("Game", back_populates="season", cascade="all, delete-orphan")
+    team_stats = relationship("TeamSeasonStats", back_populates="season", cascade="all, delete-orphan")
+
+
+class RecordType(Base):
+    """Different record types per league (e.g., Overall, Conference, Division)"""
+    __tablename__ = "record_types"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)  # e.g., "Overall", "Conference", "Division"
+    is_main = Column(Boolean, default=False)  # Main record cannot be deleted
+    sort_order = Column(Integer, default=0)  # For ordering in UI
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    league = relationship("League", back_populates="record_types")
+    team_records = relationship("TeamRecord", back_populates="record_type", cascade="all, delete-orphan")
+
+
+class TeamRecord(Base):
+    """Team record for a specific record type"""
+    __tablename__ = "team_records"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    record_type_id = Column(String, ForeignKey("record_types.id", ondelete="CASCADE"), nullable=False)
+    wins = Column(Integer, default=0)
+    losses = Column(Integer, default=0)
+    ties = Column(Integer, default=0)
+    points_for = Column(Integer, default=0)
+    points_against = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    team = relationship("Team", back_populates="records")
+    record_type = relationship("RecordType", back_populates="team_records")
+
+
+class TeamSeasonStats(Base):
+    """Track team stats per season - allows teams to persist across seasons with separate records"""
+    __tablename__ = "team_season_stats"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    season_id = Column(String, ForeignKey("seasons.id", ondelete="CASCADE"), nullable=False)
+    wins = Column(Integer, default=0)
+    losses = Column(Integer, default=0)
+    ties = Column(Integer, default=0)
+    points_for = Column(Integer, default=0)
+    points_against = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    team = relationship("Team", back_populates="season_stats")
+    season = relationship("Season", back_populates="team_stats")
 
 
 class Team(Base):
@@ -74,6 +148,8 @@ class Team(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     league = relationship("League", back_populates="teams")
+    season_stats = relationship("TeamSeasonStats", back_populates="team", cascade="all, delete-orphan")
+    records = relationship("TeamRecord", back_populates="team", cascade="all, delete-orphan")
 
 
 class Game(Base):
@@ -81,6 +157,7 @@ class Game(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
+    season_id = Column(String, ForeignKey("seasons.id", ondelete="CASCADE"), nullable=True)  # Link to season
     home_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
     away_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
     home_score = Column(Integer, default=0)
@@ -89,6 +166,11 @@ class Game(Base):
     quarter = Column(String(20))  # Q1, Q2, Halftime, Q3, Q4, OT, Final
     game_time = Column(String(10))  # Time remaining in quarter
     scheduled_at = Column(DateTime)
+    time_tbd = Column(Boolean, default=False)  # True if time is TBD (only date is set)
+    game_unit = Column(Integer)  # e.g., 1 for "Week 1", 2 for "Week 2"
+    game_unit_type = Column(Integer, default=1)  # 1=primary, 2=secondary, 3=extra
+    record_type_id = Column(String, ForeignKey("record_types.id", ondelete="SET NULL"), nullable=True)  # Which record this game counts towards
+    counts_towards_record = Column(Boolean, default=True)  # If false, game doesn't affect any record
     started_at = Column(DateTime)
     ended_at = Column(DateTime)
     share_code = Column(String(8), default=generate_share_code, unique=True)
@@ -110,8 +192,10 @@ class Game(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     league = relationship("League", back_populates="games")
+    season = relationship("Season", back_populates="games")
     home_team = relationship("Team", foreign_keys=[home_team_id])
     away_team = relationship("Team", foreign_keys=[away_team_id])
+    record_type = relationship("RecordType")
 
 
 class Bracket(Base):
@@ -128,6 +212,7 @@ class Bracket(Base):
     bottom_bracket_name = Column(String(100), default="Bottom Bracket")
     is_playoff = Column(Boolean, default=False)  # If true, shows playoff picture tab
     playoff_picture = Column(Text)  # JSON string of playoff picture data (seeds, records, etc.)
+    is_finalized = Column(Boolean, default=False)  # If true, locks editing of playoff picture
     finals_logo_url = Column(String(500))  # Optional logo for the finals/championship round
     share_code = Column(String(8), default=generate_share_code, unique=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -245,3 +330,21 @@ class ScoreboardPlayer(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     scoreboard = relationship("Scoreboard", back_populates="players")
+
+
+class Invite(Base):
+    """Invites sent from one user to another for sharing access to resources"""
+    __tablename__ = "invites"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    from_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    to_user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    resource_type = Column(String(50), nullable=False)  # 'league', 'game', 'bracket', 'scoreboard'
+    resource_id = Column(String, nullable=False)
+    resource_name = Column(String(200))  # Display name for the resource
+    permission = Column(String(20), default="view")  # 'view' or 'control'
+    status = Column(String(20), default="pending")  # 'pending', 'accepted', 'declined'
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    from_user = relationship("User", foreign_keys=[from_user_id])
+    to_user = relationship("User", foreign_keys=[to_user_id])

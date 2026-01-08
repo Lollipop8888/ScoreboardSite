@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Minus, Play, Square, Share2, Copy, Check, Trophy, RotateCcw, Flag, Pause, Volume2, Bell, Search, X, Eye, EyeOff, Video, Upload, Trash2, Zap } from 'lucide-react'
+import { Plus, Minus, Play, Square, Share2, Copy, Check, Trophy, RotateCcw, Flag, Pause, Volume2, Bell, Search, X, Eye, EyeOff, Video, Upload, Trash2, Zap, Send, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -20,7 +20,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { gameApi, standaloneGameApi, teamApi, bracketApi, createWebSocket } from '@/lib/api'
+import { gameApi, standaloneGameApi, teamApi, bracketApi, createWebSocket, inviteApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { GameScoreboardDisplay } from '@/components/GameScoreboardDisplay'
 
 const QUARTERS = ['Pregame', 'Q1', 'Q2', 'Halftime', 'Q3', 'Q4', 'OT', 'Final']
@@ -112,6 +113,7 @@ export default function LiveGamePage({ standalone = false }) {
   const [specialDistance, setSpecialDistance] = useState(null) // null, 'goal', or 'inches'
   const [ballOn, setBallOn] = useState(25)
   const [possession, setPossession] = useState('home') // 'home', 'away', or null (no possession)
+  const [hidePossession, setHidePossession] = useState(false) // Hide possession indicator without clearing it
   
   // Timeout state - 3 per half for each team
   const [homeTimeouts, setHomeTimeouts] = useState(3)
@@ -124,6 +126,7 @@ export default function LiveGamePage({ standalone = false }) {
   const [hideDownDistance, setHideDownDistance] = useState(false) // Hide D&D bar completely
   const [hideTimeouts, setHideTimeouts] = useState(false) // Hide timeout indicators
   const [hideScore, setHideScore] = useState(false) // Hide score display
+  const [hideClock, setHideClock] = useState(false) // Hide game clock display
   const [showRecords, setShowRecords] = useState(false) // Show team W-L(-T) records
   const [displayTitle, setDisplayTitle] = useState('') // Title shown at top of display
   const [showDisplayTitle, setShowDisplayTitle] = useState(false) // Whether to show the title
@@ -281,22 +284,29 @@ export default function LiveGamePage({ standalone = false }) {
         const startedAt = new Date(data.timer_started_at)
         const now = new Date()
         const elapsedSeconds = Math.floor((now - startedAt) / 1000)
-        const currentSeconds = Math.max(0, data.timer_started_seconds - elapsedSeconds)
-        // Format time inline since formatTime isn't defined yet
-        const mins = Math.floor(currentSeconds / 60)
-        const secs = currentSeconds % 60
-        const currentTime = `${mins}:${secs.toString().padStart(2, '0')}`
         
-        // Update game time based on elapsed time
-        data.game_time = currentTime
-        
-        // Resume the timer if there's still time left
-        if (currentSeconds > 0) {
-          // Mark that timer should resume - will be handled after component mounts
-          data._shouldResumeTimer = true
+        // Sanity check: elapsed time should be positive and reasonable (< 24 hours)
+        if (elapsedSeconds >= 0 && elapsedSeconds < 86400) {
+          const currentSeconds = Math.max(0, data.timer_started_seconds - elapsedSeconds)
+          // Format time inline since formatTime isn't defined yet
+          const mins = Math.floor(currentSeconds / 60)
+          const secs = currentSeconds % 60
+          const currentTime = `${mins}:${secs.toString().padStart(2, '0')}`
+          
+          // Update game time based on elapsed time
+          data.game_time = currentTime
+          
+          // Resume the timer if there's still time left
+          if (currentSeconds > 0) {
+            // Mark that timer should resume - will be handled after component mounts
+            data._shouldResumeTimer = true
+          } else {
+            // Timer ran out while away, stop it
+            api.update(gameId, { game_time: '0:00', timer_running: false }).catch(() => {})
+          }
         } else {
-          // Timer ran out while away, stop it
-          api.update(gameId, { game_time: '0:00', timer_running: false }).catch(() => {})
+          // Invalid elapsed time, stop the timer
+          api.update(gameId, { timer_running: false }).catch(() => {})
         }
       }
       
@@ -366,8 +376,8 @@ export default function LiveGamePage({ standalone = false }) {
         const awayTeamData = teams.find(t => t.id === game.away_team?.id)
         
         setTeamRecords({
-          home: homeTeamData ? { wins: homeTeamData.wins, losses: homeTeamData.losses, ties: homeTeamData.ties } : null,
-          away: awayTeamData ? { wins: awayTeamData.wins, losses: awayTeamData.losses, ties: awayTeamData.ties } : null,
+          home: homeTeamData ? { wins: homeTeamData.wins, losses: homeTeamData.losses, ties: homeTeamData.ties, points_for: homeTeamData.points_for || 0, points_against: homeTeamData.points_against || 0 } : null,
+          away: awayTeamData ? { wins: awayTeamData.wins, losses: awayTeamData.losses, ties: awayTeamData.ties, points_for: awayTeamData.points_for || 0, points_against: awayTeamData.points_against || 0 } : null,
         })
       } catch (err) {
         console.error('Failed to fetch team records:', err)
@@ -530,6 +540,8 @@ export default function LiveGamePage({ standalone = false }) {
       showKickoffChoice,
       injuryTeam,
       extraInfo,
+      hidePossession,
+      hideClock,
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -547,7 +559,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, extraInfo])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, extraInfo, hidePossession, hideClock])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -737,22 +749,22 @@ export default function LiveGamePage({ standalone = false }) {
         const awayWon = game.away_score > game.home_score
         const tied = game.home_score === game.away_score
         
-        // Update home team record
+        // Update home team record (use originalRecords for fresh data)
         await teamApi.update(game.home_team.id, {
           wins: originalRecords.home.wins + (homeWon ? 1 : 0),
           losses: originalRecords.home.losses + (awayWon ? 1 : 0),
           ties: (originalRecords.home.ties || 0) + (tied ? 1 : 0),
-          points_for: (game.home_team.points_for || 0) + game.home_score,
-          points_against: (game.home_team.points_against || 0) + game.away_score,
+          points_for: (originalRecords.home.points_for || 0) + game.home_score,
+          points_against: (originalRecords.home.points_against || 0) + game.away_score,
         })
         
-        // Update away team record
+        // Update away team record (use originalRecords for fresh data)
         await teamApi.update(game.away_team.id, {
           wins: originalRecords.away.wins + (awayWon ? 1 : 0),
           losses: originalRecords.away.losses + (homeWon ? 1 : 0),
           ties: (originalRecords.away.ties || 0) + (tied ? 1 : 0),
-          points_for: (game.away_team.points_for || 0) + game.away_score,
-          points_against: (game.away_team.points_against || 0) + game.home_score,
+          points_for: (originalRecords.away.points_for || 0) + game.away_score,
+          points_against: (originalRecords.away.points_against || 0) + game.home_score,
         })
         
         console.log('Team records updated in database')
@@ -929,7 +941,7 @@ export default function LiveGamePage({ standalone = false }) {
     const newSeconds = Math.max(0, currentSeconds - 1)
     const newTime = formatTime(newSeconds)
     
-    // Update local state
+    // Update local state only (backend calculates from timer_started_at)
     setGame(prev => prev ? { ...prev, game_time: newTime } : prev)
     
     // Handle end of clock
@@ -963,8 +975,11 @@ export default function LiveGamePage({ standalone = false }) {
       return
     }
     
-    // Sync time to server for live display updates
-    api.update(gameId, { game_time: newTime, quarter: currentGame.quarter }).catch(() => {})
+    // Sync to server periodically (every 5 seconds) to trigger WebSocket broadcasts
+    // Backend calculates live time from timer_started_at, so we don't send game_time
+    if (newSeconds % 5 === 0) {
+      api.update(gameId, { quarter: currentGame.quarter }).catch(() => {})
+    }
     
     // Schedule next tick
     if (timerRunningRef.current) {
@@ -1419,7 +1434,7 @@ export default function LiveGamePage({ standalone = false }) {
     setShowPlayClock(false)
   }
 
-  // Stage 2: Show full penalty details with team highlight and auto-update D&D
+  // Stage 2: Show full penalty details with team highlight (no D&D update yet)
   function showFlagStage2() {
     if (selectedPenalties.length === 0) return
     
@@ -1439,49 +1454,59 @@ export default function LiveGamePage({ standalone = false }) {
     setDisplayedPenalties(penaltyRecords)
     setFlagDisplayStage(2)
     setPenalties([...penaltyRecords, ...penalties])
-    
-    // Auto-update D&D based on penalty
+  }
+
+  // Apply penalty - update D&D based on penalty and hide flag
+  function applyPenalty() {
+    // Update D&D based on penalty only when Apply is clicked
     // Don't change anything if it's "&Goal" - half the distance to goal is handled manually
-    if (specialDistance === 'goal') {
-      return
-    }
-    
-    // For simplicity, use the first penalty if multiple
-    const sp = selectedPenalties[0]
-    const penalty = sp.penalty
-    const penaltyOnOffense = (sp.team === 'home' && possession === 'home') || 
-                             (sp.team === 'away' && possession === 'away')
-    
-    if (penalty.autoFirst && !penaltyOnOffense) {
-      // Defensive penalty with auto first down
-      setDown(1)
-      setDistance(10)
-      setSpecialDistance(null)
-    } else if (penalty.lossOfDown && penaltyOnOffense) {
-      // Offensive penalty with loss of down
-      if (down < 4) {
-        setDown(down + 1)
-        // Distance increases by penalty yards
-        const newDist = distance + penalty.yards
-        setDistance(Math.min(newDist, 99))
-      }
-    } else if (penaltyOnOffense && penalty.yards > 0) {
-      // Offensive penalty - add yards to distance (replay down)
-      const newDist = distance + penalty.yards
-      setDistance(Math.min(newDist, 99))
-      setSpecialDistance(null)
-    } else if (!penaltyOnOffense && penalty.yards > 0) {
-      // Defensive penalty - subtract yards from distance
-      const newDist = distance - penalty.yards
-      if (newDist <= 0) {
-        // Automatic first down
+    if (specialDistance !== 'goal' && selectedPenalties.length > 0) {
+      // For simplicity, use the first penalty if multiple
+      const sp = selectedPenalties[0]
+      const penalty = sp.penalty
+      const penaltyOnOffense = (sp.team === 'home' && possession === 'home') || 
+                               (sp.team === 'away' && possession === 'away')
+      
+      if (penalty.autoFirst && !penaltyOnOffense) {
+        // Defensive penalty with auto first down
         setDown(1)
         setDistance(10)
         setSpecialDistance(null)
-      } else {
-        setDistance(newDist)
+      } else if (penalty.lossOfDown && penaltyOnOffense) {
+        // Offensive penalty with loss of down
+        if (down < 4) {
+          setDown(down + 1)
+          // Distance increases by penalty yards
+          const newDist = distance + penalty.yards
+          setDistance(Math.min(newDist, 99))
+        }
+      } else if (penaltyOnOffense && penalty.yards > 0) {
+        // Offensive penalty - add yards to distance (replay down)
+        const newDist = distance + penalty.yards
+        setDistance(Math.min(newDist, 99))
+        setSpecialDistance(null)
+      } else if (!penaltyOnOffense && penalty.yards > 0) {
+        // Defensive penalty - subtract yards from distance
+        const newDist = distance - penalty.yards
+        if (newDist <= 0) {
+          // Automatic first down
+          setDown(1)
+          setDistance(10)
+          setSpecialDistance(null)
+        } else {
+          setDistance(newDist)
+        }
       }
     }
+    
+    // If we're on 4th down after penalty, reset goingForIt to show options again
+    // (penalty on 4th down play means they get another chance to decide)
+    if (down === 4) {
+      setGoingForIt(false)
+    }
+    
+    // Hide flag from display
+    hideFlagFromDisplay()
   }
 
   // Stage 3: Hide flag and reset panel (penalty applied)
@@ -2197,6 +2222,8 @@ export default function LiveGamePage({ standalone = false }) {
               showKickoffChoice={showKickoffChoice}
               injuryTeam={injuryTeam}
               extraInfo={extraInfo}
+              hidePossession={hidePossession}
+              hideClock={hideClock}
             />
           </CardContent>
         </Card>
@@ -2547,6 +2574,14 @@ export default function LiveGamePage({ standalone = false }) {
                   <Button variant="outline" size="sm" onClick={() => adjustGameTime(-1)}>-1</Button>
                   <Button variant="outline" size="sm" onClick={() => adjustGameTime(1)}>+1</Button>
                   <Button variant="outline" size="sm" onClick={() => adjustGameTime(60)}>+60</Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className={hideClock ? 'bg-purple-600 text-white hover:bg-purple-700' : ''}
+                    onClick={() => setHideClock(!hideClock)}
+                  >
+                    {hideClock ? '👁️' : '🙈'}
+                  </Button>
                 </div>
                 <div className="mt-3 flex items-center gap-2">
                   <Button 
@@ -2583,20 +2618,17 @@ export default function LiveGamePage({ standalone = false }) {
                       const nextQ = QUARTERS[currentIndex + 1]
                       
                       if (nextQ === 'Halftime') {
-                        // Update time FIRST, then quarter
-                        setGame(prev => ({ ...prev, game_time: '13:00' }))
-                        await updateGame({ game_time: '13:00' })
+                        // Update time and quarter together
+                        setGame(prev => ({ ...prev, game_time: '13:00', quarter: 'Halftime' }))
+                        await updateGame({ game_time: '13:00', quarter: 'Halftime' })
                         setGameStatus('halftime-show')
                         setPossession(null)
                         setHideDownDistance(true)
-                        updateGame({ quarter: 'Halftime' })
                       } else if (nextQ) {
-                        // Update time FIRST, then quarter
-                        setGame(prev => ({ ...prev, game_time: '15:00' }))
-                        await updateGame({ game_time: '15:00' })
+                        // Update time and quarter together
+                        setGame(prev => ({ ...prev, game_time: '15:00', quarter: nextQ }))
+                        await updateGame({ game_time: '15:00', quarter: nextQ })
                         setGameStatus(null)
-                        updateGame({ quarter: nextQ })
-                        startTimer()
                       }
                     }}
                   >
@@ -2856,6 +2888,16 @@ export default function LiveGamePage({ standalone = false }) {
                   onClick={() => setPossession(null)}
                 >
                   {possession === null ? "No Possession ✓" : "No Possession"}
+                </button>
+                <button
+                  className={`w-full mt-2 py-1.5 px-2 rounded-lg border-2 transition-all text-xs font-bold ${
+                    hidePossession 
+                      ? 'bg-purple-600 border-purple-600 text-white ring-2 ring-purple-400' 
+                      : 'bg-transparent border-purple-400 text-purple-600 dark:text-purple-400 opacity-60 hover:opacity-100'
+                  }`}
+                  onClick={() => setHidePossession(!hidePossession)}
+                >
+                  {hidePossession ? "Show Possession 🏈" : "Hide Possession 🏈"}
                 </button>
               </div>
             </div>
@@ -3159,7 +3201,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">
                   After TD - {pendingPAT === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation}
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   <Button 
                     className="bg-blue-600 hover:bg-blue-700"
                     onClick={() => {
@@ -3168,7 +3210,7 @@ export default function LiveGamePage({ standalone = false }) {
                       setPendingPAT(null)
                     }}
                   >
-                    🏈 PAT (1pt)
+                    🏈 PAT
                   </Button>
                   <Button 
                     className="bg-purple-600 hover:bg-purple-700"
@@ -3178,7 +3220,26 @@ export default function LiveGamePage({ standalone = false }) {
                       setPendingPAT(null)
                     }}
                   >
-                    🏃 2PT Conv
+                    🏃 2PT
+                  </Button>
+                  <Button 
+                    className="bg-slate-600 hover:bg-slate-700"
+                    onClick={() => {
+                      setKickingTeam(pendingPAT) // Track who is kicking off
+                      setPendingPAT(null)
+                      // Skip PAT - go straight to kickoff
+                      if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                        setShowOTEndPrompt(true)
+                      } else {
+                        setKickoffPending(true)
+                        setShowAdBreakPrompt(true)
+                        setPossession(null)
+                        setShowPlayClock(false)
+                        setHideDownDistance(true)
+                      }
+                    }}
+                  >
+                    ⏭️ Skip
                   </Button>
                   <Button 
                     className="bg-amber-600 hover:bg-amber-700"
@@ -3479,27 +3540,25 @@ export default function LiveGamePage({ standalone = false }) {
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
                       setFgResult('good')
+                      const scoringTeam = possession || 'home'
+                      const distance = fgDistance
+                      updateScore(scoringTeam, 3, { distance })
                       setTimeout(() => {
-                        const scoringTeam = possession || 'home'
-                        const distance = fgDistance
-                        updateScore(scoringTeam, 3, { distance })
-                        setTimeout(() => {
-                          setShowFGAttempt(false)
-                          setFgResult(null)
-                          setScoreCelebration(null)
-                          togglePossession()
-                          // Check if in OT - show end game prompt
-                          if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
-                            setShowOTEndPrompt(true)
-                          } else {
-                            setKickoffPending(true)
-                            setShowAdBreakPrompt(true)
-                            setPossession(null)
-                            setShowPlayClock(false)
-                            setHideDownDistance(true)
-                          }
-                        }, 3000)
-                      }, 2000)
+                        setShowFGAttempt(false)
+                        setFgResult(null)
+                        setScoreCelebration(null)
+                        togglePossession()
+                        // Check if in OT - show end game prompt
+                        if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                          setShowOTEndPrompt(true)
+                        } else {
+                          setKickoffPending(true)
+                          setShowAdBreakPrompt(true)
+                          setPossession(null)
+                          setShowPlayClock(false)
+                          setHideDownDistance(true)
+                        }
+                      }, 5000)
                     }}
                   >
                     ✓ Good
@@ -3795,8 +3854,6 @@ export default function LiveGamePage({ standalone = false }) {
                       // Kicking team is the scoring team, receiving team is opponent
                       setKickoffReceiver(kickingTeam === 'home' ? 'away' : 'home')
                       setShowAdBreakPrompt(false)
-                      setShowPlayClock(true)
-                      setHideDownDistance(false)
                       setKickingTeam(null)
                     }}
                   >
@@ -3810,8 +3867,6 @@ export default function LiveGamePage({ standalone = false }) {
                   onClick={() => {
                     setKickoffPending(false)
                     setShowAdBreakPrompt(false)
-                    setShowPlayClock(true)
-                    setHideDownDistance(false)
                     setKickingTeam(null)
                   }}
                 >
@@ -3837,8 +3892,6 @@ export default function LiveGamePage({ standalone = false }) {
                       setGameStatus('kickoff')
                       setKickoffReceiver('away')
                       setShowAdBreakPrompt(false)
-                      setShowPlayClock(true)
-                      setHideDownDistance(false)
                       setKickingTeam(null)
                     }}
                   >
@@ -3853,8 +3906,6 @@ export default function LiveGamePage({ standalone = false }) {
                       setGameStatus('kickoff')
                       setKickoffReceiver('home')
                       setShowAdBreakPrompt(false)
-                      setShowPlayClock(true)
-                      setHideDownDistance(false)
                       setKickingTeam(null)
                     }}
                   >
@@ -3869,8 +3920,6 @@ export default function LiveGamePage({ standalone = false }) {
                     setKickoffPending(false)
                     setGameStatus(null)
                     setShowAdBreakPrompt(false)
-                    setShowPlayClock(true)
-                    setHideDownDistance(false)
                     setKickingTeam(null)
                   }}
                 >
@@ -3890,21 +3939,18 @@ export default function LiveGamePage({ standalone = false }) {
                     const nextQ = QUARTERS[currentIndex + 1]
                     
                     if (nextQ === 'Halftime') {
-                      // Update time and clear status together, then set halftime
-                      setGame(prev => ({ ...prev, game_time: '13:00' }))
-                      await updateGame({ game_time: '13:00' })
+                      // Update time and quarter together
+                      setGame(prev => ({ ...prev, game_time: '13:00', quarter: 'Halftime' }))
+                      await updateGame({ game_time: '13:00', quarter: 'Halftime' })
                       setGameStatus('halftime-show')
                       setPossession(null)
                       setHideDownDistance(true)
                       setHideTimeouts(true)
-                      updateGame({ quarter: 'Halftime' })
                     } else if (nextQ) {
-                      // Update time FIRST, then clear status and update quarter
-                      setGame(prev => ({ ...prev, game_time: '15:00' }))
-                      await updateGame({ game_time: '15:00' })
+                      // Update time and quarter together
+                      setGame(prev => ({ ...prev, game_time: '15:00', quarter: nextQ }))
+                      await updateGame({ game_time: '15:00', quarter: nextQ })
                       setGameStatus(null)
-                      updateGame({ quarter: nextQ })
-                      startTimer()
                     }
                   }}
                 >
@@ -4514,7 +4560,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <Button
                   size="lg"
                   className="gap-2 bg-green-500 hover:bg-green-600 text-white font-bold"
-                  onClick={hideFlagFromDisplay}
+                  onClick={applyPenalty}
                   disabled={flagDisplayStage < 2}
                 >
                   <Check className="h-5 w-5" />
@@ -4920,24 +4966,21 @@ export default function LiveGamePage({ standalone = false }) {
                       className="bg-green-600 hover:bg-green-700 text-white font-bold"
                       onClick={() => {
                         setFgResult('good')
-                        // Auto-score after 2 seconds
+                        const scoringTeam = possession || 'home'
+                        const distance = fgDistance
+                        updateScore(scoringTeam, 3, { distance })
+                        // Close the FG attempt panel after celebration
                         setTimeout(() => {
-                          const scoringTeam = possession || 'home'
-                          const distance = fgDistance
-                          updateScore(scoringTeam, 3, { distance })
-                          // Close the FG attempt panel after scoring
-                          setTimeout(() => {
-                            setShowFGAttempt(false)
-                            setFgResult(null)
-                            setScoreCelebration(null)
-                            togglePossession()
-                            setKickoffPending(true)
-                            setShowAdBreakPrompt(true)
-                            setPossession(null)
-                            setShowPlayClock(false)
-                            setHideDownDistance(true)
-                          }, 3000)
-                        }, 2000)
+                          setShowFGAttempt(false)
+                          setFgResult(null)
+                          setScoreCelebration(null)
+                          togglePossession()
+                          setKickoffPending(true)
+                          setShowAdBreakPrompt(true)
+                          setPossession(null)
+                          setShowPlayClock(false)
+                          setHideDownDistance(true)
+                        }, 5000)
                       }}
                     >
                       ✓ Good!

@@ -181,6 +181,17 @@ async def create_league(
     db.add(db_league)
     db.commit()
     db.refresh(db_league)
+    
+    # Create default "Overall" record type
+    main_record_type = models.RecordType(
+        league_id=db_league.id,
+        name="Overall",
+        is_main=True,
+        sort_order=0
+    )
+    db.add(main_record_type)
+    db.commit()
+    
     return db_league
 
 
@@ -235,6 +246,18 @@ def get_user_leagues(username: str, db: Session = Depends(get_db)):
     return db.query(models.League).filter(models.League.owner_id == user.id).all()
 
 
+# NOTE: This route must come BEFORE /api/leagues/{league_id} to avoid path parameter matching "share"
+@app.get("/api/leagues/share/{share_code}", response_model=schemas.LeagueWithTeams)
+def get_league_by_share_code(share_code: str, db: Session = Depends(get_db)):
+    """Get a league by its share code (public endpoint)"""
+    league = db.query(models.League).options(
+        joinedload(models.League.teams)
+    ).filter(models.League.share_code == share_code.upper()).first()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    return league
+
+
 @app.get("/api/leagues/{league_id}", response_model=schemas.LeagueWithTeams)
 def get_league(league_id: str, db: Session = Depends(get_db)):
     league = db.query(models.League).options(
@@ -257,17 +280,6 @@ def check_league_ownership(db: Session, league_id: str, current_user: Optional[m
     return db_league
 
 
-@app.get("/api/leagues/share/{share_code}", response_model=schemas.LeagueWithTeams)
-def get_league_by_share_code(share_code: str, db: Session = Depends(get_db)):
-    """Get a league by its share code (public endpoint)"""
-    league = db.query(models.League).options(
-        joinedload(models.League.teams)
-    ).filter(models.League.share_code == share_code.upper()).first()
-    if not league:
-        raise HTTPException(status_code=404, detail="League not found")
-    return league
-
-
 @app.put("/api/leagues/{league_id}", response_model=schemas.League)
 async def update_league(
     league_id: str, 
@@ -277,8 +289,12 @@ async def update_league(
 ):
     db_league = check_league_ownership(db, league_id, current_user)
     for key, value in league.model_dump(exclude_unset=True).items():
-        # Convert groups dict to JSON string
+        # Convert dict/list fields to JSON string
         if key == 'groups' and value is not None:
+            value = json.dumps(value)
+        elif key == 'penalties' and value is not None:
+            value = json.dumps(value)
+        elif key == 'mechanics' and value is not None:
             value = json.dumps(value)
         setattr(db_league, key, value)
     db.commit()
@@ -308,6 +324,14 @@ async def delete_league(
         # Delete games
         db.query(models.Game).filter(models.Game.league_id == league_id).delete(synchronize_session=False)
         
+        # Delete team season stats (for all seasons in this league)
+        season_ids = [s.id for s in db.query(models.Season).filter(models.Season.league_id == league_id).all()]
+        if season_ids:
+            db.query(models.TeamSeasonStats).filter(models.TeamSeasonStats.season_id.in_(season_ids)).delete(synchronize_session=False)
+        
+        # Delete seasons
+        db.query(models.Season).filter(models.Season.league_id == league_id).delete(synchronize_session=False)
+        
         # Delete teams
         db.query(models.Team).filter(models.Team.league_id == league_id).delete(synchronize_session=False)
         
@@ -319,6 +343,250 @@ async def delete_league(
         raise HTTPException(status_code=500, detail=str(e))
     
     return None
+
+
+# ============ Season Endpoints ============
+@app.get("/api/leagues/{league_id}/seasons", response_model=List[schemas.Season])
+def get_league_seasons(league_id: str, db: Session = Depends(get_db)):
+    """Get all seasons for a league"""
+    return db.query(models.Season).filter(models.Season.league_id == league_id).order_by(models.Season.created_at.desc()).all()
+
+
+@app.get("/api/leagues/{league_id}/current-season", response_model=Optional[schemas.Season])
+def get_current_season(league_id: str, db: Session = Depends(get_db)):
+    """Get the current active season for a league"""
+    return db.query(models.Season).filter(
+        models.Season.league_id == league_id,
+        models.Season.is_current == True
+    ).first()
+
+
+@app.post("/api/seasons", response_model=schemas.Season)
+async def create_season(
+    season: schemas.SeasonCreate,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """Create a new season for a league"""
+    check_league_ownership(db, season.league_id, current_user)
+    
+    # Set all other seasons for this league to not current
+    db.query(models.Season).filter(
+        models.Season.league_id == season.league_id
+    ).update({"is_current": False})
+    
+    # Create the new season as current
+    db_season = models.Season(**season.model_dump(), is_current=True)
+    db.add(db_season)
+    db.commit()
+    db.refresh(db_season)
+    
+    # Create TeamSeasonStats for all teams in the league
+    teams = db.query(models.Team).filter(models.Team.league_id == season.league_id).all()
+    for team in teams:
+        team_stats = models.TeamSeasonStats(
+            team_id=team.id,
+            season_id=db_season.id
+        )
+        db.add(team_stats)
+    db.commit()
+    
+    return db_season
+
+
+@app.put("/api/seasons/{season_id}", response_model=schemas.Season)
+async def update_season(
+    season_id: str,
+    season: schemas.SeasonUpdate,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """Update a season"""
+    db_season = db.query(models.Season).filter(models.Season.id == season_id).first()
+    if not db_season:
+        raise HTTPException(status_code=404, detail="Season not found")
+    
+    check_league_ownership(db, db_season.league_id, current_user)
+    
+    # If setting this season as current, unset others
+    if season.is_current:
+        db.query(models.Season).filter(
+            models.Season.league_id == db_season.league_id,
+            models.Season.id != season_id
+        ).update({"is_current": False})
+    
+    for key, value in season.model_dump(exclude_unset=True).items():
+        setattr(db_season, key, value)
+    
+    db.commit()
+    db.refresh(db_season)
+    return db_season
+
+
+@app.post("/api/seasons/{season_id}/end", response_model=schemas.Season)
+async def end_season(
+    season_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """End a season - marks it as finished and not current"""
+    db_season = db.query(models.Season).filter(models.Season.id == season_id).first()
+    if not db_season:
+        raise HTTPException(status_code=404, detail="Season not found")
+    
+    check_league_ownership(db, db_season.league_id, current_user)
+    
+    db_season.is_finished = True
+    db_season.is_current = False
+    db.commit()
+    db.refresh(db_season)
+    return db_season
+
+
+@app.get("/api/seasons/{season_id}/standings", response_model=List[schemas.TeamSeasonStats])
+def get_season_standings(season_id: str, db: Session = Depends(get_db)):
+    """Get standings for a specific season"""
+    stats = db.query(models.TeamSeasonStats).filter(
+        models.TeamSeasonStats.season_id == season_id
+    ).all()
+    
+    # Sort by wins (desc), then losses (asc), then point differential
+    sorted_stats = sorted(stats, key=lambda s: (
+        -s.wins,
+        s.losses,
+        -(s.points_for - s.points_against)
+    ))
+    return sorted_stats
+
+
+# ============ Record Type Endpoints ============
+@app.get("/api/leagues/{league_id}/record-types", response_model=List[schemas.RecordType])
+def get_league_record_types(league_id: str, db: Session = Depends(get_db)):
+    """Get all record types for a league"""
+    record_types = db.query(models.RecordType).filter(
+        models.RecordType.league_id == league_id
+    ).order_by(models.RecordType.sort_order, models.RecordType.created_at).all()
+    return record_types
+
+
+@app.post("/api/record-types", response_model=schemas.RecordType)
+async def create_record_type(
+    record_type: schemas.RecordTypeCreate,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """Create a new record type for a league"""
+    check_league_ownership(db, record_type.league_id, current_user)
+    
+    # Get max sort_order for this league
+    max_order = db.query(models.RecordType).filter(
+        models.RecordType.league_id == record_type.league_id
+    ).count()
+    
+    db_record_type = models.RecordType(
+        **record_type.model_dump(),
+        is_main=False,
+        sort_order=max_order
+    )
+    db.add(db_record_type)
+    db.commit()
+    db.refresh(db_record_type)
+    
+    # Create TeamRecord entries for all teams in the league
+    teams = db.query(models.Team).filter(models.Team.league_id == record_type.league_id).all()
+    for team in teams:
+        team_record = models.TeamRecord(
+            team_id=team.id,
+            record_type_id=db_record_type.id
+        )
+        db.add(team_record)
+    db.commit()
+    
+    return db_record_type
+
+
+@app.put("/api/record-types/{record_type_id}", response_model=schemas.RecordType)
+async def update_record_type(
+    record_type_id: str,
+    record_type_update: schemas.RecordTypeUpdate,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """Update a record type"""
+    db_record_type = db.query(models.RecordType).filter(models.RecordType.id == record_type_id).first()
+    if not db_record_type:
+        raise HTTPException(status_code=404, detail="Record type not found")
+    
+    check_league_ownership(db, db_record_type.league_id, current_user)
+    
+    update_data = record_type_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_record_type, key, value)
+    
+    db.commit()
+    db.refresh(db_record_type)
+    return db_record_type
+
+
+@app.delete("/api/record-types/{record_type_id}")
+async def delete_record_type(
+    record_type_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """Delete a record type (cannot delete main record type)"""
+    db_record_type = db.query(models.RecordType).filter(models.RecordType.id == record_type_id).first()
+    if not db_record_type:
+        raise HTTPException(status_code=404, detail="Record type not found")
+    
+    check_league_ownership(db, db_record_type.league_id, current_user)
+    
+    if db_record_type.is_main:
+        raise HTTPException(status_code=400, detail="Cannot delete main record type")
+    
+    # Clear record_type_id from games that use this record type
+    db.query(models.Game).filter(models.Game.record_type_id == record_type_id).update(
+        {models.Game.record_type_id: None}
+    )
+    
+    db.delete(db_record_type)
+    db.commit()
+    return {"message": "Record type deleted"}
+
+
+@app.get("/api/leagues/{league_id}/team-records")
+def get_league_team_records(league_id: str, record_type_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """Get team records for a league, optionally filtered by record type"""
+    query = db.query(models.TeamRecord).join(models.Team).filter(models.Team.league_id == league_id)
+    
+    if record_type_id:
+        query = query.filter(models.TeamRecord.record_type_id == record_type_id)
+    
+    records = query.all()
+    
+    # Return as list of dicts with team info
+    result = []
+    for record in records:
+        team = record.team
+        result.append({
+            "id": record.id,
+            "team_id": record.team_id,
+            "record_type_id": record.record_type_id,
+            "team_name": team.name,
+            "team_color": team.color,
+            "team_abbreviation": team.abbreviation,
+            "team_group_1": team.group_1,
+            "team_group_2": team.group_2,
+            "wins": record.wins,
+            "losses": record.losses,
+            "ties": record.ties,
+            "points_for": record.points_for,
+            "points_against": record.points_against,
+        })
+    
+    # Sort by wins desc, losses asc, point diff
+    result.sort(key=lambda r: (-r["wins"], r["losses"], -(r["points_for"] - r["points_against"])))
+    return result
 
 
 # ============ Team Endpoints ============
@@ -334,6 +602,19 @@ async def create_team(
     db.add(db_team)
     db.commit()
     db.refresh(db_team)
+    
+    # Create TeamRecord entries for all record types in the league
+    record_types = db.query(models.RecordType).filter(
+        models.RecordType.league_id == team.league_id
+    ).all()
+    for rt in record_types:
+        team_record = models.TeamRecord(
+            team_id=db_team.id,
+            record_type_id=rt.id
+        )
+        db.add(team_record)
+    db.commit()
+    
     return db_team
 
 
@@ -475,7 +756,19 @@ async def create_game(
 ):
     # Check user owns the league this game belongs to
     check_league_ownership(db, game.league_id, current_user)
-    db_game = models.Game(**game.model_dump())
+    
+    game_data = game.model_dump()
+    
+    # Auto-assign current season if not provided
+    if not game_data.get('season_id'):
+        current_season = db.query(models.Season).filter(
+            models.Season.league_id == game.league_id,
+            models.Season.is_current == True
+        ).first()
+        if current_season:
+            game_data['season_id'] = current_season.id
+    
+    db_game = models.Game(**game_data)
     db.add(db_game)
     db.commit()
     db.refresh(db_game)
@@ -497,7 +790,15 @@ def calculate_live_game_time(game):
     """Calculate the current game time if timer is running"""
     if game.timer_running and game.timer_started_at and game.timer_started_seconds is not None:
         now = datetime.utcnow()
-        elapsed_seconds = int((now - game.timer_started_at).total_seconds())
+        # Ensure timer_started_at is treated as UTC (remove any timezone info for comparison)
+        started_at = game.timer_started_at
+        if hasattr(started_at, 'replace'):
+            started_at = started_at.replace(tzinfo=None)
+        elapsed_seconds = int((now - started_at).total_seconds())
+        # Sanity check: elapsed time should be positive and reasonable (< 24 hours)
+        if elapsed_seconds < 0 or elapsed_seconds > 86400:
+            # Something is wrong with the timestamp, don't modify game_time
+            return game
         current_seconds = max(0, game.timer_started_seconds - elapsed_seconds)
         mins = current_seconds // 60
         secs = current_seconds % 60
@@ -586,6 +887,9 @@ async def update_game(
         joinedload(models.Game.away_team)
     ).filter(models.Game.id == game_id).first()
     
+    # Calculate live game time if timer is running before broadcasting
+    calculate_live_game_time(game)
+    
     await manager.broadcast(f"game:{db_game.share_code}", {
         "type": "game_update",
         "data": {
@@ -603,6 +907,9 @@ async def update_game(
             "away_timeouts": game.away_timeouts,
             "play_clock": game.play_clock,
             "display_state": game.display_state,
+            "timer_running": game.timer_running,
+            "timer_started_at": game.timer_started_at.isoformat() if game.timer_started_at else None,
+            "timer_started_seconds": game.timer_started_seconds,
             "home_team": {"id": game.home_team.id, "name": game.home_team.name, "abbreviation": game.home_team.abbreviation, "color": game.home_team.color, "color2": game.home_team.color2, "logo_url": game.home_team.logo_url},
             "away_team": {"id": game.away_team.id, "name": game.away_team.name, "abbreviation": game.away_team.abbreviation, "color": game.away_team.color, "color2": game.away_team.color2, "logo_url": game.away_team.logo_url}
         }
@@ -1573,6 +1880,123 @@ async def scoreboard_websocket(websocket: WebSocket, share_code: str):
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, room)
+
+
+# ============ Invite Endpoints ============
+@app.post("/api/invites")
+async def create_invite(
+    invite: schemas.InviteCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Send an invite to another user"""
+    # Find the target user by username
+    to_user = auth.get_user_by_username(db, invite.to_username)
+    if not to_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if to_user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot invite yourself")
+    
+    # Check if invite already exists
+    existing = db.query(models.Invite).filter(
+        models.Invite.from_user_id == current_user.id,
+        models.Invite.to_user_id == to_user.id,
+        models.Invite.resource_type == invite.resource_type,
+        models.Invite.resource_id == invite.resource_id,
+        models.Invite.status == "pending"
+    ).first()
+    
+    if existing:
+        raise HTTPException(status_code=400, detail="Invite already sent")
+    
+    # Create the invite
+    db_invite = models.Invite(
+        from_user_id=current_user.id,
+        to_user_id=to_user.id,
+        resource_type=invite.resource_type,
+        resource_id=invite.resource_id,
+        resource_name=invite.resource_name,
+        permission=invite.permission
+    )
+    db.add(db_invite)
+    db.commit()
+    db.refresh(db_invite)
+    
+    return {
+        "id": db_invite.id,
+        "message": f"Invite sent to {invite.to_username}"
+    }
+
+
+@app.get("/api/invites/pending")
+async def get_pending_invites(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Get all pending invites for the current user"""
+    invites = db.query(models.Invite).filter(
+        models.Invite.to_user_id == current_user.id,
+        models.Invite.status == "pending"
+    ).order_by(models.Invite.created_at.desc()).all()
+    
+    result = []
+    for inv in invites:
+        result.append({
+            "id": inv.id,
+            "from_user_id": inv.from_user_id,
+            "from_username": inv.from_user.username,
+            "resource_type": inv.resource_type,
+            "resource_id": inv.resource_id,
+            "resource_name": inv.resource_name,
+            "permission": inv.permission,
+            "status": inv.status,
+            "created_at": inv.created_at.isoformat()
+        })
+    return result
+
+
+@app.put("/api/invites/{invite_id}")
+async def respond_to_invite(
+    invite_id: str,
+    update: schemas.InviteUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Accept or decline an invite"""
+    invite = db.query(models.Invite).filter(models.Invite.id == invite_id).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    
+    if invite.to_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your invite")
+    
+    if invite.status != "pending":
+        raise HTTPException(status_code=400, detail="Invite already responded to")
+    
+    invite.status = update.status
+    db.commit()
+    
+    return {"message": f"Invite {update.status}"}
+
+
+@app.delete("/api/invites/{invite_id}")
+async def delete_invite(
+    invite_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Delete an invite (by sender or recipient)"""
+    invite = db.query(models.Invite).filter(models.Invite.id == invite_id).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    
+    if invite.from_user_id != current_user.id and invite.to_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    db.delete(invite)
+    db.commit()
+    return {"message": "Invite deleted"}
 
 
 if __name__ == "__main__":

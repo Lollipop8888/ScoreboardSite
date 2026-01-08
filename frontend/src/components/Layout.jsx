@@ -36,22 +36,22 @@ export default function Layout() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-green-50/30 dark:from-slate-950 dark:to-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-green-50/30 dark:from-slate-950 dark:to-slate-900 overflow-x-hidden">
       <header className="sticky top-0 z-50 border-b border-green-100 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm">
-        <div className="container mx-auto px-4">
-          <div className="flex h-16 items-center justify-between">
-            <Link to="/" className="flex items-center gap-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-amber-600 to-amber-800 text-white shadow-md">
-                <Target className="h-5 w-5" />
+        <div className="container mx-auto px-2 sm:px-4">
+          <div className="flex h-14 sm:h-16 items-center justify-between gap-1">
+            <Link to="/" className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              <div className="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-gradient-to-br from-amber-600 to-amber-800 text-white shadow-md">
+                <Target className="h-4 w-4 sm:h-5 sm:w-5" />
               </div>
               <div className="flex flex-col">
-                <span className="text-xl font-bold text-slate-900 dark:text-white leading-tight">GridIron</span>
-                <span className="text-[10px] text-green-700 dark:text-green-400 font-semibold uppercase tracking-wider leading-tight">Score Tracker</span>
+                <span className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white leading-tight">GridIron</span>
+                <span className="text-[9px] sm:text-[10px] text-green-700 dark:text-green-400 font-semibold uppercase tracking-wider leading-tight hidden xs:block">Score Tracker</span>
               </div>
             </Link>
             
-            <div className="flex items-center gap-2">
-              <nav className="flex items-center gap-1">
+            <div className="flex items-center gap-1 sm:gap-2">
+              <nav className="flex items-center gap-0.5 sm:gap-1">
                 {navItems.map((item) => {
                   const Icon = item.icon
                   const isActive = location.pathname === item.path || 
@@ -62,7 +62,7 @@ export default function Layout() {
                       key={item.path}
                       to={item.path}
                       className={cn(
-                        "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+                        "flex items-center gap-1 sm:gap-2 rounded-lg px-2 sm:px-4 py-1.5 sm:py-2 text-sm font-medium transition-colors",
                         isActive
                           ? "bg-green-600 text-white"
                           : "text-slate-600 dark:text-slate-300 hover:bg-green-50 dark:hover:bg-slate-800 hover:text-green-700 dark:hover:text-green-400"
@@ -144,12 +144,12 @@ export default function Layout() {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-2 sm:px-4 py-4 sm:py-8 overflow-x-hidden">
         <Outlet />
       </main>
 
-      <footer className="border-t border-green-100 dark:border-slate-800 bg-white dark:bg-slate-900 py-6">
-        <div className="container mx-auto px-4 text-center text-sm text-slate-500 dark:text-slate-400">
+      <footer className="border-t border-green-100 dark:border-slate-800 bg-white dark:bg-slate-900 py-4 sm:py-6">
+        <div className="container mx-auto px-2 sm:px-4 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400">
           <p className="flex items-center justify-center gap-2">
             <Target className="h-4 w-4 text-amber-700 dark:text-amber-500" />
             GridIron Score Tracker - Football leagues, games, and scoreboards

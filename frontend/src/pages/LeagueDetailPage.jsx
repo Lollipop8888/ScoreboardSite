@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { Plus, Trophy, Users, Calendar, GitBranch, Share2, Trash2, Play, Upload, X, Pencil, Copy, Check, Settings } from 'lucide-react'
+import { Plus, Trophy, Users, Calendar, GitBranch, Share2, Trash2, Play, Upload, X, Pencil, Copy, Check, Settings, Send, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -22,12 +22,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { leagueApi, teamApi, gameApi, bracketApi } from '@/lib/api'
+import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, inviteApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { QRCodeSVG } from 'qrcode.react'
 
 export default function LeagueDetailPage() {
   const { leagueId } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [league, setLeague] = useState(null)
   const [standings, setStandings] = useState([])
   const [games, setGames] = useState([])
@@ -50,6 +52,21 @@ export default function LeagueDetailPage() {
   const [copied, setCopied] = useState(false)
   const [newGroup1, setNewGroup1] = useState('')
   const [newGroup2, setNewGroup2] = useState('')
+  const [gameUnitEnabled, setGameUnitEnabled] = useState(false)
+  const [gameUnitLabel, setGameUnitLabel] = useState('')
+  const [seasons, setSeasons] = useState([])
+  const [currentSeason, setCurrentSeason] = useState(null)
+  const [newSeasonDialogOpen, setNewSeasonDialogOpen] = useState(false)
+  const [newSeasonName, setNewSeasonName] = useState('')
+  const [recordTypes, setRecordTypes] = useState([])
+  const [selectedRecordType, setSelectedRecordType] = useState(null) // null = main/Overall
+  const [newRecordTypeName, setNewRecordTypeName] = useState('')
+  const [settingsTab, setSettingsTab] = useState('general')
+  const [newPenalty, setNewPenalty] = useState('')
+  const [inviteUsername, setInviteUsername] = useState('')
+  const [invitePermission, setInvitePermission] = useState('view')
+  const [inviteError, setInviteError] = useState('')
+  const [inviteSuccess, setInviteSuccess] = useState('')
   
   // Form states
   const [teamForm, setTeamForm] = useState({ name: '', location: '', abbreviation: '', group_1: '', group_2: '', color: '#3B82F6', color2: '', color3: '' })
@@ -69,8 +86,8 @@ export default function LeagueDetailPage() {
     }
   })()
   const [statsForm, setStatsForm] = useState({ wins: 0, losses: 0, ties: 0, points_for: 0, points_against: 0 })
-  const [gameForm, setGameForm] = useState({ home_team_id: '', away_team_id: '', scheduled_at: '' })
-  const [gameEditForm, setGameEditForm] = useState({ home_team_id: '', away_team_id: '', scheduled_at: '' })
+  const [gameForm, setGameForm] = useState({ home_team_id: '', away_team_id: '', scheduled_date: '', scheduled_time: '', game_unit: '', game_unit_type: '1' })
+  const [gameEditForm, setGameEditForm] = useState({ home_team_id: '', away_team_id: '', scheduled_date: '', scheduled_time: '', game_unit: '', game_unit_type: '1' })
   const [bracketForm, setBracketForm] = useState({ name: '', num_teams: 4, layout: 'one_sided', team_ids: [], is_playoff: false })
   const [bracketSlots, setBracketSlots] = useState([]) // Array of team IDs or 'BYE' for each slot
 
@@ -83,22 +100,34 @@ export default function LeagueDetailPage() {
       // First get the league - this is required
       const leagueData = await leagueApi.get(leagueId)
       setLeague(leagueData)
+      // Sync game unit state
+      setGameUnitEnabled(!!leagueData.game_unit_label)
+      setGameUnitLabel(leagueData.game_unit_label || 'Week')
       
       // Then get the rest - these can fail without breaking the page
       try {
-        const [standingsData, gamesData, bracketsData] = await Promise.all([
+        const [standingsData, gamesData, bracketsData, seasonsData, currentSeasonData, recordTypesData] = await Promise.all([
           leagueApi.getStandings(leagueId),
           leagueApi.getGames(leagueId),
           leagueApi.getBrackets(leagueId),
+          leagueApi.getSeasons(leagueId),
+          leagueApi.getCurrentSeason(leagueId),
+          recordTypeApi.getByLeague(leagueId),
         ])
         setStandings(standingsData || [])
         setGames(gamesData || [])
         setBrackets(bracketsData || [])
+        setSeasons(seasonsData || [])
+        setCurrentSeason(currentSeasonData)
+        setRecordTypes(recordTypesData || [])
       } catch (err) {
         console.error('Failed to load additional data:', err)
         setStandings([])
         setGames([])
         setBrackets([])
+        setSeasons([])
+        setCurrentSeason(null)
+        setRecordTypes([])
       }
     } catch (error) {
       console.error('Failed to load league:', error)
@@ -273,24 +302,31 @@ export default function LeagueDetailPage() {
   async function handleAddGame(e) {
     e.preventDefault()
     try {
-      // datetime-local gives us a string like "2025-12-11T19:00"
-      // We need to treat this as Eastern Time and convert to UTC for storage
+      // Build scheduled_at from date and time
       let scheduledAtISO = null
-      if (gameForm.scheduled_at) {
-        // Append seconds and ET timezone offset
-        // Note: This assumes Eastern Time. For proper handling, we'd need a timezone library
-        const dateStr = gameForm.scheduled_at + ':00'
-        scheduledAtISO = dateStr // Send as-is, backend will handle
+      const timeTbd = !gameForm.scheduled_time
+      if (gameForm.scheduled_date) {
+        if (timeTbd) {
+          // Date only, time TBD - store as midnight
+          scheduledAtISO = gameForm.scheduled_date + 'T00:00:00'
+        } else {
+          // Full date and time
+          scheduledAtISO = gameForm.scheduled_date + 'T' + gameForm.scheduled_time + ':00'
+        }
       }
       
       const gameData = { 
-        ...gameForm, 
+        home_team_id: gameForm.home_team_id,
+        away_team_id: gameForm.away_team_id,
         league_id: leagueId,
-        scheduled_at: scheduledAtISO
+        scheduled_at: scheduledAtISO,
+        time_tbd: gameForm.scheduled_date ? timeTbd : false,
+        game_unit: gameForm.game_unit ? parseInt(gameForm.game_unit) : null,
+        game_unit_type: gameForm.game_unit ? parseInt(gameForm.game_unit_type) : 1
       }
       await gameApi.create(gameData)
       setGameDialogOpen(false)
-      setGameForm({ home_team_id: '', away_team_id: '', scheduled_at: '' })
+      setGameForm({ home_team_id: '', away_team_id: '', scheduled_date: '', scheduled_time: '', game_unit: '', game_unit_type: '1' })
       loadData()
     } catch (error) {
       console.error('Failed to add game:', error)
@@ -309,22 +345,28 @@ export default function LeagueDetailPage() {
 
   function openEditGame(game) {
     setEditingGame(game)
-    // Convert stored date to datetime-local format
-    let scheduledAt = ''
+    // Convert stored date to separate date/time fields
+    let scheduledDate = ''
+    let scheduledTime = ''
     if (game.scheduled_at) {
-      // Treat stored time as UTC and format for datetime-local input
       const date = new Date(game.scheduled_at + 'Z')
       const year = date.getUTCFullYear()
       const month = String(date.getUTCMonth() + 1).padStart(2, '0')
       const day = String(date.getUTCDate()).padStart(2, '0')
-      const hours = String(date.getUTCHours()).padStart(2, '0')
-      const minutes = String(date.getUTCMinutes()).padStart(2, '0')
-      scheduledAt = `${year}-${month}-${day}T${hours}:${minutes}`
+      scheduledDate = `${year}-${month}-${day}`
+      if (!game.time_tbd) {
+        const hours = String(date.getUTCHours()).padStart(2, '0')
+        const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+        scheduledTime = `${hours}:${minutes}`
+      }
     }
     setGameEditForm({
       home_team_id: game.home_team?.id || '',
       away_team_id: game.away_team?.id || '',
-      scheduled_at: scheduledAt
+      scheduled_date: scheduledDate,
+      scheduled_time: scheduledTime,
+      game_unit: game.game_unit?.toString() || '',
+      game_unit_type: (game.game_unit_type || 1).toString()
     })
     setGameEditDialogOpen(true)
   }
@@ -333,12 +375,23 @@ export default function LeagueDetailPage() {
     e.preventDefault()
     if (!editingGame) return
     try {
-      // Send the datetime as-is (it's already in the format the backend expects)
-      // The datetime-local input gives us "YYYY-MM-DDTHH:MM" format
+      // Build scheduled_at from date and time
+      let scheduledAtISO = null
+      const timeTbd = !gameEditForm.scheduled_time
+      if (gameEditForm.scheduled_date) {
+        if (timeTbd) {
+          scheduledAtISO = gameEditForm.scheduled_date + 'T00:00:00'
+        } else {
+          scheduledAtISO = gameEditForm.scheduled_date + 'T' + gameEditForm.scheduled_time + ':00'
+        }
+      }
       await gameApi.update(editingGame.id, {
         home_team_id: gameEditForm.home_team_id,
         away_team_id: gameEditForm.away_team_id,
-        scheduled_at: gameEditForm.scheduled_at ? gameEditForm.scheduled_at + ':00' : null
+        scheduled_at: scheduledAtISO,
+        time_tbd: gameEditForm.scheduled_date ? timeTbd : false,
+        game_unit: gameEditForm.game_unit ? parseInt(gameEditForm.game_unit) : null,
+        game_unit_type: gameEditForm.game_unit ? parseInt(gameEditForm.game_unit_type) : 1
       })
       setGameEditDialogOpen(false)
       setEditingGame(null)
@@ -401,9 +454,13 @@ export default function LeagueDetailPage() {
   }
 
   // Open share dialog
-  function openShareDialog(type, code, name) {
-    setShareInfo({ type, code, name })
+  function openShareDialog(type, code, name, resourceId = null) {
+    setShareInfo({ type, code, name, resourceId: resourceId || leagueId })
     setCopied(false)
+    setInviteUsername('')
+    setInvitePermission('view')
+    setInviteError('')
+    setInviteSuccess('')
     setShareDialogOpen(true)
   }
 
@@ -418,6 +475,28 @@ export default function LeagueDetailPage() {
     navigator.clipboard.writeText(url)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  async function handleSendInvite() {
+    if (!inviteUsername.trim()) {
+      setInviteError('Please enter a username')
+      return
+    }
+    setInviteError('')
+    setInviteSuccess('')
+    try {
+      await inviteApi.send({
+        to_username: inviteUsername.trim(),
+        resource_type: shareInfo.type,
+        resource_id: shareInfo.resourceId,
+        resource_name: shareInfo.name,
+        permission: invitePermission,
+      })
+      setInviteSuccess(`Invite sent to @${inviteUsername.trim()}!`)
+      setInviteUsername('')
+    } catch (e) {
+      setInviteError(e.message || 'Failed to send invite')
+    }
   }
 
   if (loading) {
@@ -446,7 +525,7 @@ export default function LeagueDetailPage() {
               </span>
             )}
           </div>
-          <p className="text-slate-600 dark:text-slate-400">{league.sport} - {league.season}</p>
+          <p className="text-slate-600 dark:text-slate-400">{league.season}</p>
         </div>
         <Button
           variant="outline"
@@ -1146,14 +1225,62 @@ export default function LeagueDetailPage() {
                         </Select>
                       </div>
                       <div className="grid gap-2">
-                        <Label>Scheduled Time (Optional)</Label>
+                        <Label>Scheduled Date</Label>
                         <Input
-                          type="datetime-local"
-                          value={gameForm.scheduled_at}
-                          onChange={(e) => setGameForm({ ...gameForm, scheduled_at: e.target.value })}
+                          type="date"
+                          value={gameForm.scheduled_date}
+                          onChange={(e) => setGameForm({ ...gameForm, scheduled_date: e.target.value })}
                         />
-                        <p className="text-xs text-slate-500">Leave empty for unscheduled games</p>
+                        <p className="text-xs text-slate-500">Leave empty for TBD</p>
                       </div>
+                      {gameForm.scheduled_date && (
+                        <div className="grid gap-2">
+                          <Label>Scheduled Time</Label>
+                          <Input
+                            type="time"
+                            value={gameForm.scheduled_time}
+                            onChange={(e) => setGameForm({ ...gameForm, scheduled_time: e.target.value })}
+                          />
+                          <p className="text-xs text-slate-500">Leave empty for TBD</p>
+                        </div>
+                      )}
+                      {(league.game_unit_label || league.game_unit_label_2 || league.game_unit_label_3) && (
+                        <div className="grid gap-2">
+                          <Label>Time Unit</Label>
+                          <div className="flex gap-2">
+                            <Select
+                              value={gameForm.game_unit_type}
+                              onValueChange={(val) => setGameForm({ ...gameForm, game_unit_type: val })}
+                            >
+                              <SelectTrigger className="w-[180px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {league.game_unit_label && (
+                                  <SelectItem value="1">{league.game_unit_label}</SelectItem>
+                                )}
+                                {league.game_unit_label_2 && (
+                                  <SelectItem value="2">{league.game_unit_label_2}</SelectItem>
+                                )}
+                                {league.game_unit_label_3 && (
+                                  <SelectItem value="3">{league.game_unit_label_3}</SelectItem>
+                                )}
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              type="number"
+                              min="1"
+                              placeholder="Number"
+                              className="w-24"
+                              value={gameForm.game_unit}
+                              onChange={(e) => setGameForm({ ...gameForm, game_unit: e.target.value })}
+                            />
+                          </div>
+                          <p className="text-xs text-slate-500">
+                            e.g., {league.game_unit_label || 'Week'} 1, {league.game_unit_label_2 || 'Playoff'} 1
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <DialogFooter>
                       <Button type="submit" disabled={!gameForm.home_team_id || !gameForm.away_team_id}>
@@ -1207,6 +1334,50 @@ export default function LeagueDetailPage() {
                   return true
                 })
 
+                // Sort games: by game_unit, then by scheduled_at
+                // For completed games: descending (most recent first)
+                // For scheduled/live games: ascending (upcoming first)
+                const isCompleted = gamesFilter === 'completed'
+                const sortedGames = [...filteredGames].sort((a, b) => {
+                  // First sort by game_unit (nulls last)
+                  if (a.game_unit !== b.game_unit) {
+                    if (a.game_unit === null) return 1
+                    if (b.game_unit === null) return -1
+                    return isCompleted 
+                      ? b.game_unit - a.game_unit  // Descending for completed
+                      : a.game_unit - b.game_unit  // Ascending for scheduled/live
+                  }
+                  // Then by scheduled_at
+                  if (a.scheduled_at !== b.scheduled_at) {
+                    if (!a.scheduled_at) return 1
+                    if (!b.scheduled_at) return -1
+                    return isCompleted
+                      ? new Date(b.scheduled_at) - new Date(a.scheduled_at)  // Most recent first
+                      : new Date(a.scheduled_at) - new Date(b.scheduled_at)  // Upcoming first
+                  }
+                  return 0
+                })
+
+                // Helper to get unit label based on type
+                const getUnitLabel = (type) => {
+                  if (type === 2 && league.game_unit_label_2) return league.game_unit_label_2
+                  if (type === 3 && league.game_unit_label_3) return league.game_unit_label_3
+                  return league.game_unit_label || 'Week'
+                }
+
+                // Group games by game_unit_type and game_unit if league has any unit labels
+                const hasAnyUnitLabel = league.game_unit_label || league.game_unit_label_2 || league.game_unit_label_3
+                const groupedGames = hasAnyUnitLabel
+                  ? sortedGames.reduce((acc, game) => {
+                      const unitType = game.game_unit_type || 1
+                      const unitNum = game.game_unit
+                      const key = unitNum ? `${unitType}-${unitNum}` : 'Unassigned'
+                      if (!acc[key]) acc[key] = { type: unitType, num: unitNum, games: [] }
+                      acc[key].games.push(game)
+                      return acc
+                    }, {})
+                  : null
+
                 if (games.length === 0) {
                   return (
                     <p className="text-center text-slate-500 py-8">
@@ -1225,102 +1396,138 @@ export default function LeagueDetailPage() {
                   )
                 }
 
-                return (
-                  <div className="space-y-3">
-                    {filteredGames.map((game) => (
-                      <div
-                        key={game.id}
-                        className="flex items-center justify-between rounded-lg border p-4"
-                      >
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2">
-                            <div
-                              className="h-4 w-4 rounded-full"
-                              style={{ backgroundColor: game.away_team?.color || '#888' }}
-                            />
-                            <span className="font-medium">{game.away_team?.name || 'TBD'}</span>
-                          </div>
-                          <span className="text-slate-400">@</span>
-                          <div className="flex items-center gap-2">
-                            <div
-                              className="h-4 w-4 rounded-full"
-                              style={{ backgroundColor: game.home_team?.color || '#888' }}
-                            />
-                            <span className="font-medium">{game.home_team?.name || 'TBD'}</span>
-                          </div>
-                        </div>
-                        {game.scheduled_at && (
-                          <span className="text-xs text-slate-500">
-                            📅 {new Date(game.scheduled_at + 'Z').toLocaleDateString('en-US', { timeZone: 'UTC' })} at {new Date(game.scheduled_at + 'Z').toLocaleTimeString('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        )}
-                      </div>
+                // Render function for a single game
+                const renderGame = (game) => (
+                  <div
+                    key={game.id}
+                    className="flex items-center justify-between rounded-lg border p-4"
+                  >
+                    <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-4">
-                        {game.status === 'final' || game.quarter === 'Final' ? (
-                          <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded text-xs font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">FINAL</span>
-                            <span className="text-lg font-bold">
-                              {game.away_score} - {game.home_score}
-                            </span>
-                            {game.away_score !== game.home_score && (
-                              <span className="text-xs font-semibold text-green-600">
-                                🏆 {game.away_score > game.home_score ? game.away_team?.name : game.home_team?.name}
-                              </span>
-                            )}
-                            {game.away_score === game.home_score && (
-                              <span className="text-xs font-semibold text-slate-500">TIE</span>
-                            )}
-                          </div>
-                        ) : game.status === 'live' ? (
-                          <div className="flex items-center gap-2">
-                            <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                            <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-600">LIVE</span>
-                            <span className="text-lg font-bold">
-                              {game.away_score} - {game.home_score}
-                            </span>
-                            {game.quarter && game.quarter !== 'Pregame' && (
-                              <span className="text-xs text-slate-500">{game.quarter}</span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-600">SCHEDULED</span>
-                        )}
-                        <div className="flex gap-2">
-                          <Button asChild variant="outline" size="sm" className="gap-1">
-                            <Link to={`/games/${game.id}`}>
-                              <Play className="h-3 w-3" />
-                              {game.status === 'scheduled' ? 'Start' : 'View'}
-                            </Link>
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => openShareDialog('game', game.share_code, `${game.home_team?.name || 'Home'} vs ${game.away_team?.name || 'Away'}`)}
-                          >
-                            <Share2 className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => openEditGame(game)}
-                            disabled={league.is_finished}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                            onClick={() => handleDeleteGame(game.id)}
-                            disabled={league.is_finished}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="h-4 w-4 rounded-full"
+                            style={{ backgroundColor: game.away_team?.color || '#888' }}
+                          />
+                          <span className="font-medium">{game.away_team?.name || 'TBD'}</span>
                         </div>
+                        <span className="text-slate-400">@</span>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="h-4 w-4 rounded-full"
+                            style={{ backgroundColor: game.home_team?.color || '#888' }}
+                          />
+                          <span className="font-medium">{game.home_team?.name || 'TBD'}</span>
+                        </div>
+                      </div>
+                      {game.scheduled_at && (
+                        <span className="text-xs text-slate-500">
+                          📅 {new Date(game.scheduled_at + 'Z').toLocaleDateString('en-US', { timeZone: 'UTC' })}{game.time_tbd ? ' • Time TBD' : ` at ${new Date(game.scheduled_at + 'Z').toLocaleTimeString('en-US', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' })}`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4">
+                      {game.status === 'final' || game.quarter === 'Final' ? (
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded text-xs font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">FINAL</span>
+                          <span className="text-lg font-bold">
+                            {game.away_score} - {game.home_score}
+                          </span>
+                          {game.away_score !== game.home_score && (
+                            <span className="text-xs font-semibold text-green-600">
+                              🏆 {game.away_score > game.home_score ? game.away_team?.name : game.home_team?.name}
+                            </span>
+                          )}
+                          {game.away_score === game.home_score && (
+                            <span className="text-xs font-semibold text-slate-500">TIE</span>
+                          )}
+                        </div>
+                      ) : game.status === 'live' ? (
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                          <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-600">LIVE</span>
+                          <span className="text-lg font-bold">
+                            {game.away_score} - {game.home_score}
+                          </span>
+                          {game.quarter && game.quarter !== 'Pregame' && (
+                            <span className="text-xs text-slate-500">{game.quarter}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded text-xs font-bold bg-blue-100 text-blue-600">SCHEDULED</span>
+                      )}
+                      <div className="flex gap-2">
+                        <Button asChild variant="outline" size="sm" className="gap-1">
+                          <Link to={`/games/${game.id}`}>
+                            <Play className="h-3 w-3" />
+                            {game.status === 'scheduled' ? 'Start' : 'View'}
+                          </Link>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openShareDialog('game', game.share_code, `${game.home_team?.name || 'Home'} vs ${game.away_team?.name || 'Away'}`)}
+                        >
+                          <Share2 className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEditGame(game)}
+                          disabled={league.is_finished}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => handleDeleteGame(game.id)}
+                          disabled={league.is_finished}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
                     </div>
-                  ))}
+                  </div>
+                )
+
+                // Render grouped or flat list
+                if (groupedGames) {
+                  const units = Object.keys(groupedGames).sort((a, b) => {
+                    if (a === 'Unassigned') return 1
+                    if (b === 'Unassigned') return -1
+                    const [typeA, numA] = a.split('-').map(Number)
+                    const [typeB, numB] = b.split('-').map(Number)
+                    // Sort by type first, then by number
+                    if (typeA !== typeB) return typeA - typeB
+                    return isCompleted ? numB - numA : numA - numB
+                  })
+                  return (
+                    <div className="space-y-6">
+                      {units.map(key => {
+                        const group = groupedGames[key]
+                        const label = key === 'Unassigned' 
+                          ? 'Unassigned' 
+                          : `${getUnitLabel(group.type)} ${group.num}`
+                        return (
+                          <div key={key}>
+                            <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-400 mb-2 border-b pb-1">
+                              {label}
+                            </h3>
+                            <div className="space-y-3">
+                              {group.games.map(renderGame)}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {sortedGames.map(renderGame)}
                   </div>
                 )
               })()}
@@ -1504,6 +1711,32 @@ export default function LeagueDetailPage() {
 
         {/* Settings Tab */}
         <TabsContent value="settings">
+          {/* Settings Sub-tabs */}
+          <div className="flex gap-2 mb-6 border-b pb-2">
+            <button
+              onClick={() => setSettingsTab('general')}
+              className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                settingsTab === 'general'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              General
+            </button>
+            <button
+              onClick={() => setSettingsTab('mechanics')}
+              className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                settingsTab === 'mechanics'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              Mechanics
+            </button>
+          </div>
+
+          {settingsTab === 'general' && (
+          <>
           {/* League Info Card */}
           <Card className="mb-6">
             <CardHeader>
@@ -1511,7 +1744,7 @@ export default function LeagueDetailPage() {
               <CardDescription>Basic league details</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="league-name">League Name</Label>
                   <Input
@@ -1521,24 +1754,6 @@ export default function LeagueDetailPage() {
                       if (e.target.value && e.target.value !== league.name) {
                         try {
                           await leagueApi.update(leagueId, { name: e.target.value })
-                          loadData()
-                        } catch (error) {
-                          console.error('Failed to update league:', error)
-                        }
-                      }
-                    }}
-                    disabled={league.is_finished}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="league-sport">Sport</Label>
-                  <Input
-                    id="league-sport"
-                    defaultValue={league.sport}
-                    onBlur={async (e) => {
-                      if (e.target.value && e.target.value !== league.sport) {
-                        try {
-                          await leagueApi.update(leagueId, { sport: e.target.value })
                           loadData()
                         } catch (error) {
                           console.error('Failed to update league:', error)
@@ -1621,6 +1836,111 @@ export default function LeagueDetailPage() {
             </CardContent>
           </Card>
 
+          {/* Game Organization Card */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Game Organization</CardTitle>
+              <CardDescription>Group and sort games by a unit like Week, Round, or Game Day</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="enable-game-units"
+                  checked={gameUnitEnabled}
+                  onChange={(e) => {
+                    const checked = e.target.checked
+                    setGameUnitEnabled(checked)
+                    const label = checked ? (gameUnitLabel || 'Week') : null
+                    if (checked) setGameUnitLabel(label)
+                    leagueApi.update(leagueId, { game_unit_label: label })
+                      .then(() => setLeague(prev => ({ ...prev, game_unit_label: label })))
+                      .catch(err => {
+                        console.error('Failed to update:', err)
+                        setGameUnitEnabled(!checked)
+                      })
+                  }}
+                  disabled={league.is_finished}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="enable-game-units" className="font-medium">
+                  Organize games by unit
+                </Label>
+              </div>
+              
+              {gameUnitEnabled && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="game-unit-label">Primary Unit</Label>
+                      <Input
+                        id="game-unit-label"
+                        placeholder="e.g., Week"
+                        value={gameUnitLabel}
+                        onChange={(e) => setGameUnitLabel(e.target.value)}
+                        onBlur={async () => {
+                          const newValue = gameUnitLabel.trim() || 'Week'
+                          setGameUnitLabel(newValue)
+                          try {
+                            await leagueApi.update(leagueId, { game_unit_label: newValue })
+                            setLeague(prev => ({ ...prev, game_unit_label: newValue }))
+                          } catch (error) {
+                            console.error('Failed to update league:', error)
+                          }
+                        }}
+                        disabled={league.is_finished}
+                      />
+                      <p className="text-xs text-slate-500">Main unit (e.g., Week)</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="game-unit-label-2">Secondary Unit</Label>
+                      <Input
+                        id="game-unit-label-2"
+                        placeholder="e.g., Playoff Week"
+                        defaultValue={league.game_unit_label_2 || ''}
+                        onBlur={async (e) => {
+                          const newValue = e.target.value.trim() || null
+                          try {
+                            await leagueApi.update(leagueId, { game_unit_label_2: newValue })
+                            setLeague(prev => ({ ...prev, game_unit_label_2: newValue }))
+                          } catch (error) {
+                            console.error('Failed to update league:', error)
+                          }
+                        }}
+                        disabled={league.is_finished}
+                      />
+                      <p className="text-xs text-slate-500">Optional (e.g., Playoff)</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="game-unit-label-3">Extra Unit</Label>
+                      <Input
+                        id="game-unit-label-3"
+                        placeholder="e.g., Preseason"
+                        defaultValue={league.game_unit_label_3 || ''}
+                        onBlur={async (e) => {
+                          const newValue = e.target.value.trim() || null
+                          try {
+                            await leagueApi.update(leagueId, { game_unit_label_3: newValue })
+                            setLeague(prev => ({ ...prev, game_unit_label_3: newValue }))
+                          } catch (error) {
+                            console.error('Failed to update league:', error)
+                          }
+                        }}
+                        disabled={league.is_finished}
+                      />
+                      <p className="text-xs text-slate-500">Optional (e.g., Preseason)</p>
+                    </div>
+                  </div>
+                  <div className="p-3 bg-green-50 dark:bg-green-900/30 rounded-lg">
+                    <p className="text-sm text-green-700 dark:text-green-300">
+                      ✓ Select a unit type and number when creating or editing games.
+                    </p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Quick Actions Card */}
           <Card className="mb-6">
             <CardHeader>
@@ -1686,7 +2006,6 @@ export default function LeagueDetailPage() {
                       const data = {
                         league: {
                           name: league.name,
-                          sport: league.sport,
                           season: league.season,
                         },
                         teams: standings.map(t => ({
@@ -1730,7 +2049,6 @@ export default function LeagueDetailPage() {
                         try {
                           const newLeague = await leagueApi.create({
                             name: newName,
-                            sport: league.sport,
                             season: league.season,
                             has_groups: league.has_groups,
                             group_label_1: league.group_label_1,
@@ -1763,6 +2081,122 @@ export default function LeagueDetailPage() {
                     Duplicate
                   </Button>
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Season Management Card */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Season Management</CardTitle>
+              <CardDescription>Manage seasons for this league</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Current Season */}
+              <div className="p-4 border rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium">Current Season</h4>
+                    <p className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                      {currentSeason?.name || 'No active season'}
+                    </p>
+                  </div>
+                  {currentSeason && !currentSeason.is_finished && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-amber-600 hover:text-amber-700"
+                      onClick={async () => {
+                        if (confirm(`End the current season "${currentSeason.name}"? This will archive the current standings and games.`)) {
+                          try {
+                            await seasonApi.end(currentSeason.id)
+                            loadData()
+                          } catch (error) {
+                            console.error('Failed to end season:', error)
+                          }
+                        }
+                      }}
+                    >
+                      End Season
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {/* New Season */}
+              <div className="p-4 border rounded-lg space-y-3">
+                <h4 className="font-medium">Start New Season</h4>
+                <p className="text-sm text-slate-500">Create a new season. Teams will keep their roster but stats will reset.</p>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="e.g., 2026-27, Spring 2026"
+                    value={newSeasonName}
+                    onChange={(e) => setNewSeasonName(e.target.value)}
+                  />
+                  <Button
+                    onClick={async () => {
+                      if (!newSeasonName.trim()) {
+                        alert('Please enter a season name')
+                        return
+                      }
+                      if (currentSeason && !currentSeason.is_finished) {
+                        if (!confirm(`This will end the current season "${currentSeason.name}" and start a new one. Continue?`)) {
+                          return
+                        }
+                        await seasonApi.end(currentSeason.id)
+                      }
+                      try {
+                        await seasonApi.create({ league_id: leagueId, name: newSeasonName.trim() })
+                        setNewSeasonName('')
+                        loadData()
+                      } catch (error) {
+                        console.error('Failed to create season:', error)
+                        alert('Failed to create season: ' + error.message)
+                      }
+                    }}
+                  >
+                    Create Season
+                  </Button>
+                </div>
+              </div>
+
+              {/* Past Seasons */}
+              {seasons.filter(s => s.is_finished).length > 0 && (
+                <div className="p-4 border rounded-lg space-y-3">
+                  <h4 className="font-medium">Past Seasons</h4>
+                  <div className="space-y-2">
+                    {seasons.filter(s => s.is_finished).map(season => (
+                      <div key={season.id} className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded">
+                        <span className="font-medium">{season.name}</span>
+                        <span className="text-xs text-slate-500">Ended</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* End League */}
+              <div className="p-4 border border-red-200 dark:border-red-800 rounded-lg space-y-3 bg-red-50 dark:bg-red-900/20">
+                <h4 className="font-medium text-red-700 dark:text-red-400">End League</h4>
+                <p className="text-sm text-red-600 dark:text-red-400">Permanently lock this league. No more games or changes can be made.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 border-red-300 hover:bg-red-100 dark:hover:bg-red-900/50"
+                  disabled={league.is_finished}
+                  onClick={async () => {
+                    if (confirm('Are you sure you want to end this league? This will lock all editing permanently.')) {
+                      try {
+                        await leagueApi.update(leagueId, { is_finished: true })
+                        loadData()
+                      } catch (error) {
+                        console.error('Failed to end league:', error)
+                      }
+                    }
+                  }}
+                >
+                  {league.is_finished ? '🔒 League Ended' : 'End League'}
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -2077,6 +2511,229 @@ export default function LeagueDetailPage() {
               </div>
             </CardContent>
           </Card>
+          </>
+          )}
+
+          {settingsTab === 'mechanics' && (
+          <>
+          {/* Penalties Card */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Penalties</CardTitle>
+              <CardDescription>Manage the list of penalties available during games</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Add new penalty */}
+              <div className="flex gap-2">
+                <Input
+                  placeholder="New penalty name (e.g., Holding)"
+                  value={newPenalty}
+                  onChange={(e) => setNewPenalty(e.target.value)}
+                  disabled={league.is_finished}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newPenalty.trim()) {
+                      e.preventDefault()
+                      const currentPenalties = league.penalties ? JSON.parse(league.penalties) : []
+                      if (!currentPenalties.includes(newPenalty.trim())) {
+                        const updated = [...currentPenalties, newPenalty.trim()]
+                        leagueApi.update(leagueId, { penalties: updated })
+                          .then(() => {
+                            setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) }))
+                            setNewPenalty('')
+                          })
+                          .catch(err => console.error('Failed to add penalty:', err))
+                      }
+                    }
+                  }}
+                />
+                <Button
+                  onClick={() => {
+                    if (!newPenalty.trim()) return
+                    const currentPenalties = league.penalties ? JSON.parse(league.penalties) : []
+                    if (!currentPenalties.includes(newPenalty.trim())) {
+                      const updated = [...currentPenalties, newPenalty.trim()]
+                      leagueApi.update(leagueId, { penalties: updated })
+                        .then(() => {
+                          setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) }))
+                          setNewPenalty('')
+                        })
+                        .catch(err => console.error('Failed to add penalty:', err))
+                    }
+                  }}
+                  disabled={league.is_finished || !newPenalty.trim()}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add
+                </Button>
+              </div>
+
+              {/* Penalty list */}
+              <div className="space-y-2">
+                {(() => {
+                  const penalties = league.penalties ? JSON.parse(league.penalties) : []
+                  if (penalties.length === 0) {
+                    return (
+                      <p className="text-sm text-slate-500 py-4 text-center">
+                        No penalties configured. Add some common penalties like "Holding", "False Start", "Offsides".
+                      </p>
+                    )
+                  }
+                  return penalties.map((penalty, index) => (
+                    <div key={index} className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded">
+                      <span>{penalty}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-500 hover:text-red-700 h-8 w-8 p-0"
+                        disabled={league.is_finished}
+                        onClick={() => {
+                          const updated = penalties.filter((_, i) => i !== index)
+                          leagueApi.update(leagueId, { penalties: updated })
+                            .then(() => setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) })))
+                            .catch(err => console.error('Failed to remove penalty:', err))
+                        }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))
+                })()}
+              </div>
+
+              {/* Quick add common penalties */}
+              <div className="pt-4 border-t">
+                <p className="text-sm text-slate-500 mb-2">Quick add common penalties:</p>
+                <div className="flex flex-wrap gap-2">
+                  {['Holding', 'False Start', 'Offsides', 'Pass Interference', 'Illegal Formation', 'Delay of Game', 'Encroachment', 'Illegal Motion', 'Unsportsmanlike Conduct', 'Roughing the Passer'].map(penalty => {
+                    const currentPenalties = league.penalties ? JSON.parse(league.penalties) : []
+                    const alreadyAdded = currentPenalties.includes(penalty)
+                    return (
+                      <Button
+                        key={penalty}
+                        variant="outline"
+                        size="sm"
+                        disabled={league.is_finished || alreadyAdded}
+                        className={alreadyAdded ? 'opacity-50' : ''}
+                        onClick={() => {
+                          if (!alreadyAdded) {
+                            const updated = [...currentPenalties, penalty]
+                            leagueApi.update(leagueId, { penalties: updated })
+                              .then(() => setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) })))
+                              .catch(err => console.error('Failed to add penalty:', err))
+                          }
+                        }}
+                      >
+                        {alreadyAdded ? '✓ ' : '+ '}{penalty}
+                      </Button>
+                    )
+                  })}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Game Mechanics Card */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Game Mechanics</CardTitle>
+              <CardDescription>Toggle which features are available during live games</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(() => {
+                const mechanics = league.mechanics ? JSON.parse(league.mechanics) : {}
+                const toggleMechanic = (key, value) => {
+                  const updated = { ...mechanics, [key]: value }
+                  leagueApi.update(leagueId, { mechanics: updated })
+                    .then(() => setLeague(prev => ({ ...prev, mechanics: JSON.stringify(updated) })))
+                    .catch(err => console.error('Failed to update mechanic:', err))
+                }
+                return (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">Downs & Distance</p>
+                        <p className="text-sm text-slate-500">Track down, distance, and ball position</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={mechanics.downs !== false}
+                        onChange={(e) => toggleMechanic('downs', e.target.checked)}
+                        disabled={league.is_finished}
+                        className="h-5 w-5 rounded"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">Play Clock</p>
+                        <p className="text-sm text-slate-500">Show play clock countdown</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={mechanics.play_clock !== false}
+                        onChange={(e) => toggleMechanic('play_clock', e.target.checked)}
+                        disabled={league.is_finished}
+                        className="h-5 w-5 rounded"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">Timeouts</p>
+                        <p className="text-sm text-slate-500">Track team timeouts</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={mechanics.timeouts !== false}
+                        onChange={(e) => toggleMechanic('timeouts', e.target.checked)}
+                        disabled={league.is_finished}
+                        className="h-5 w-5 rounded"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">Possession Indicator</p>
+                        <p className="text-sm text-slate-500">Show which team has the ball</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={mechanics.possession !== false}
+                        onChange={(e) => toggleMechanic('possession', e.target.checked)}
+                        disabled={league.is_finished}
+                        className="h-5 w-5 rounded"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">Penalties</p>
+                        <p className="text-sm text-slate-500">Show penalty buttons during games</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={mechanics.penalties !== false}
+                        onChange={(e) => toggleMechanic('penalties', e.target.checked)}
+                        disabled={league.is_finished}
+                        className="h-5 w-5 rounded"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">Quarter/Period Tracking</p>
+                        <p className="text-sm text-slate-500">Show current quarter and game clock</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={mechanics.quarters !== false}
+                        onChange={(e) => toggleMechanic('quarters', e.target.checked)}
+                        disabled={league.is_finished}
+                        className="h-5 w-5 rounded"
+                      />
+                    </div>
+                  </div>
+                )
+              })()}
+            </CardContent>
+          </Card>
+          </>
+          )}
         </TabsContent>
       </Tabs>
 
@@ -2131,14 +2788,59 @@ export default function LeagueDetailPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Scheduled Time (Eastern Time)</Label>
+              <Label>Scheduled Date</Label>
               <Input
-                type="datetime-local"
-                value={gameEditForm.scheduled_at}
-                onChange={(e) => setGameEditForm({ ...gameEditForm, scheduled_at: e.target.value })}
+                type="date"
+                value={gameEditForm.scheduled_date}
+                onChange={(e) => setGameEditForm({ ...gameEditForm, scheduled_date: e.target.value })}
               />
-              <p className="text-xs text-slate-500">Leave empty for unscheduled games. Times are in ET.</p>
+              <p className="text-xs text-slate-500">Leave empty for TBD</p>
             </div>
+            {gameEditForm.scheduled_date && (
+              <div className="space-y-2">
+                <Label>Scheduled Time</Label>
+                <Input
+                  type="time"
+                  value={gameEditForm.scheduled_time}
+                  onChange={(e) => setGameEditForm({ ...gameEditForm, scheduled_time: e.target.value })}
+                />
+                <p className="text-xs text-slate-500">Leave empty for TBD</p>
+              </div>
+            )}
+            {(league.game_unit_label || league.game_unit_label_2 || league.game_unit_label_3) && (
+              <div className="space-y-2">
+                <Label>Time Unit</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={gameEditForm.game_unit_type}
+                    onValueChange={(val) => setGameEditForm({ ...gameEditForm, game_unit_type: val })}
+                  >
+                    <SelectTrigger className="w-[180px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {league.game_unit_label && (
+                        <SelectItem value="1">{league.game_unit_label}</SelectItem>
+                      )}
+                      {league.game_unit_label_2 && (
+                        <SelectItem value="2">{league.game_unit_label_2}</SelectItem>
+                      )}
+                      {league.game_unit_label_3 && (
+                        <SelectItem value="3">{league.game_unit_label_3}</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="Number"
+                    className="w-24"
+                    value={gameEditForm.game_unit}
+                    onChange={(e) => setGameEditForm({ ...gameEditForm, game_unit: e.target.value })}
+                  />
+                </div>
+              </div>
+            )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setGameEditDialogOpen(false)}>
                 Cancel
@@ -2206,6 +2908,55 @@ export default function LeagueDetailPage() {
                 <p className="text-xs text-slate-400">
                   Add <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">?compact=true</code> for scorebug style, 
                   or <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">?transparent=true</code> for transparent background
+                </p>
+              </div>
+            )}
+
+            {/* Invite by Username */}
+            {user && (
+              <div className="space-y-3 pt-4 border-t">
+                <Label className="text-sm text-slate-500 flex items-center gap-2">
+                  <Send className="h-4 w-4" />
+                  Invite by Username
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Enter username"
+                    value={inviteUsername}
+                    onChange={(e) => setInviteUsername(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendInvite()}
+                  />
+                  <Select value={invitePermission} onValueChange={setInvitePermission}>
+                    <SelectTrigger className="w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="view">
+                        <span className="flex items-center gap-1">
+                          <Eye className="h-3 w-3" /> View
+                        </span>
+                      </SelectItem>
+                      <SelectItem value="control">
+                        <span className="flex items-center gap-1">
+                          <Settings className="h-3 w-3" /> Control
+                        </span>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button onClick={handleSendInvite} size="icon">
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+                {inviteError && (
+                  <p className="text-sm text-red-500">{inviteError}</p>
+                )}
+                {inviteSuccess && (
+                  <p className="text-sm text-green-600">{inviteSuccess}</p>
+                )}
+                <p className="text-xs text-slate-400">
+                  {invitePermission === 'view' 
+                    ? 'User will be able to view this resource' 
+                    : 'User will be able to control and edit this resource'}
                 </p>
               </div>
             )}
