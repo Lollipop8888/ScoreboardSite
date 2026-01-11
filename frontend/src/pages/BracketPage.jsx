@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { bracketApi, teamApi, leagueApi, createWebSocket } from '@/lib/api'
+import { HelpButton } from '@/components/HelpTips'
 
 // Match Card Component with seed numbers
 function MatchCard({ match, onClick, seed1, seed2, showSeeds = false }) {
@@ -820,6 +821,11 @@ export default function BracketPage() {
 
   return (
     <div className="space-y-6">
+      {/* Floating help button */}
+      <div className="fixed bottom-6 right-6 z-50">
+        <HelpButton context="bracket" className="shadow-lg" />
+      </div>
+
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -1388,38 +1394,62 @@ export default function BracketPage() {
               {/* Link to Game */}
               <div className="space-y-2 pt-4 border-t">
                 <Label>Link to Game (Optional)</Label>
-                <Select
-                  value={matchForm.game_id}
-                  onValueChange={(value) => setMatchForm({ ...matchForm, game_id: value === 'none' ? '' : value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a game to link..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">-- No Game Linked --</SelectItem>
-                    {leagueGames.map((game) => (
-                      <SelectItem key={game.id} value={game.id}>
-                        {game.home_team?.name || 'TBD'} vs {game.away_team?.name || 'TBD'}
-                        {game.scheduled_at && ` - ${new Date(game.scheduled_at).toLocaleDateString()}`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {matchForm.game_id && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => {
-                      const game = leagueGames.find(g => g.id === matchForm.game_id)
-                      if (game) {
-                        window.open(`/game/${game.id}`, '_blank')
-                      }
-                    }}
+                {matchForm.game_id ? (
+                  <div className="space-y-2">
+                    <div className="p-2 bg-slate-100 dark:bg-slate-800 rounded text-sm">
+                      {(() => {
+                        const game = leagueGames.find(g => g.id === matchForm.game_id)
+                        if (!game) return 'Linked Game'
+                        return `${game.home_team?.name || 'TBD'} vs ${game.away_team?.name || 'TBD'}${game.scheduled_at ? ` - ${new Date(game.scheduled_at).toLocaleDateString()}` : ''}`
+                      })()}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => {
+                          const game = leagueGames.find(g => g.id === matchForm.game_id)
+                          if (game) {
+                            window.open(`/games/${game.id}`, '_blank')
+                          }
+                        }}
+                      >
+                        Open Game
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 text-red-500 hover:text-red-700"
+                        onClick={() => setMatchForm({ ...matchForm, game_id: '' })}
+                      >
+                        Unlink
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Select
+                    value={matchForm.game_id}
+                    onValueChange={(value) => setMatchForm({ ...matchForm, game_id: value === 'none' ? '' : value })}
                   >
-                    Open Linked Game
-                  </Button>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a game to link..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">-- No Game Linked --</SelectItem>
+                      {leagueGames
+                        .filter(game => game.status === 'scheduled' || game.status === 'live')
+                        .map((game) => (
+                          <SelectItem key={game.id} value={game.id}>
+                            {game.home_team?.name || 'TBD'} vs {game.away_team?.name || 'TBD'}
+                            {game.scheduled_at && ` - ${new Date(game.scheduled_at).toLocaleDateString()}`}
+                            {game.status === 'live' && ' (LIVE)'}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 )}
               </div>
             </div>

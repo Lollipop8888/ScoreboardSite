@@ -393,6 +393,10 @@ export default function ScoreboardsPage() {
             <Trophy className="mx-auto h-12 w-12 text-slate-400" />
             <h3 className="mt-4 text-lg font-semibold text-slate-900 dark:text-white">No games yet</h3>
             <p className="mt-2 text-slate-600 dark:text-slate-400">Create your first quick game to get started.</p>
+            <Button className="mt-4 gap-2" onClick={() => setDialogOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Create Game
+            </Button>
           </CardContent>
         </Card>
       ) : (

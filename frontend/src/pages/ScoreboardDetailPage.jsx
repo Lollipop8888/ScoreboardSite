@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { HelpButton } from '@/components/HelpTips'
 
 // Football scoring options
 const SCORING_OPTIONS = [
@@ -267,6 +268,11 @@ export default function ScoreboardDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* Floating help button */}
+      <div className="fixed bottom-6 right-6 z-50">
+        <HelpButton context="scoreboard" className="shadow-lg" />
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div className="flex items-start gap-2">

@@ -1,6 +1,40 @@
 import { Flag } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Component } from 'react'
 import { AnimatedScore } from '@/components/ui/animated-score'
+
+// Error boundary to prevent white screens
+class ScoreboardErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('Scoreboard render error:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-slate-900 rounded-2xl p-6 text-center">
+          <p className="text-red-400 font-semibold">Display Error</p>
+          <p className="text-slate-400 text-sm mt-2">Unable to render scoreboard</p>
+          <button 
+            onClick={() => this.setState({ hasError: false, error: null })}
+            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm"
+          >
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 export function GameScoreboardDisplay({ 
   game, 
@@ -64,9 +98,14 @@ export function GameScoreboardDisplay({
   kickoffReceiver,
   showKickoffChoice,
   injuryTeam,
+  showInjury,
+  showCommercial,
   extraInfo,
   hidePossession,
   hideClock,
+  displayStats,
+  quickStats,
+  viewerCount,
 }) {
   const homeTeam = game.home_team || { name: 'Home', abbreviation: 'HME', color: '#3B82F6' }
   const awayTeam = game.away_team || { name: 'Away', abbreviation: 'AWY', color: '#6B7280' }
@@ -121,10 +160,14 @@ export function GameScoreboardDisplay({
   kickoffReceiver = kickoffReceiver ?? displayState?.kickoffReceiver ?? null
   showKickoffChoice = showKickoffChoice ?? displayState?.showKickoffChoice ?? false
   injuryTeam = injuryTeam ?? displayState?.injuryTeam ?? null
+  showInjury = showInjury ?? displayState?.showInjury ?? false
+  showCommercial = showCommercial ?? displayState?.showCommercial ?? false
   extraInfo = extraInfo ?? displayState?.extraInfo ?? { show: false, side: 'away', lines: [{ text: '', fontSize: 'md' }], bgColor: '#3b82f6', textColor: '#ffffff' }
   showPlayClock = showPlayClock ?? displayState?.showPlayClock ?? true
   hidePossession = hidePossession ?? displayState?.hidePossession ?? false
   hideClock = hideClock ?? displayState?.hideClock ?? false
+  displayStats = displayStats ?? displayState?.displayStats ?? { show: false, quarterScores: false, turnovers: false, firstDowns: false, penalties: false, all: false }
+  quickStats = quickStats ?? displayState?.quickStats ?? { home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 }, away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 } }
 
   // Delayed D&D space removal - after 3 seconds of being hidden, remove the space entirely
   const [removeDownDistanceSpace, setRemoveDownDistanceSpace] = useState(false)
@@ -245,28 +288,9 @@ export function GameScoreboardDisplay({
   }
 
   return (
-    <div className="flex items-stretch gap-2 overflow-visible">
-      {/* Left Extra Info Box (Away side) */}
-      {extraInfo?.show && extraInfo?.side === 'away' && extraInfo?.lines?.some(l => l.text) && (
-        <div 
-          className="w-32 rounded-xl p-3 flex flex-col items-center justify-center text-center animate-slide-up transition-all duration-300"
-          style={{ backgroundColor: extraInfo.bgColor }}
-        >
-          {extraInfo.lines.map((line, index) => (
-            line.text && (
-              <p 
-                key={index} 
-                className={`font-bold ${getExtraInfoFontSize(line.fontSize)}`}
-                style={{ color: line.textColor || extraInfo.textColor }}
-              >
-                {line.text}
-              </p>
-            )
-          ))}
-        </div>
-      )}
-      
-      <div className="flex-1 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 rounded-xl p-6 text-white relative shadow-2xl border border-slate-800/50 overflow-visible">
+    <ScoreboardErrorBoundary>
+    <div className="flex flex-col overflow-visible">
+      <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 rounded-xl p-6 text-white relative shadow-2xl border border-slate-800/50 overflow-visible">
         {/* Subtle ambient background glow */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-24 -left-24 w-48 h-48 bg-blue-500/5 rounded-full blur-3xl"></div>
@@ -524,120 +548,17 @@ export function GameScoreboardDisplay({
         </div>
       )}
 
-      {/* Challenge Overlay */}
-      {challengeActive && challengeTeam && (
-        <div className="absolute inset-x-4 top-4 z-20 bg-gradient-to-r from-red-700 to-red-600 rounded-lg px-4 py-3 animate-bounce-in">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">🚩</span>
-              {(challengeTeam === 'home' ? homeTeam.logo_url : awayTeam.logo_url) ? (
-                <img 
-                  src={challengeTeam === 'home' ? homeTeam.logo_url : awayTeam.logo_url}
-                  alt=""
-                  className="h-8 w-auto max-w-12 object-contain"
-                />
-              ) : (
-                <span className="text-lg font-bold text-white">
-                  {challengeTeam === 'home' ? homeTeam.abbreviation : awayTeam.abbreviation}
-                </span>
-              )}
-              <span className="text-xl font-black text-white tracking-wider">CHALLENGE</span>
-            </div>
-            {(reviewReason || reviewCallOnField) && (
-              <div className="flex items-center gap-4 text-white/90">
-                {reviewReason && (
-                  <span className="text-sm font-semibold">Reviewing: {reviewReason}</span>
-                )}
-                {reviewCallOnField && (
-                  <span className="text-sm font-medium">Call: {reviewCallOnField}</span>
-                )}
-              </div>
-            )}
-            <span className="text-2xl">🚩</span>
-          </div>
-        </div>
-      )}
 
-      {/* Timeout Overlay - only show full screen when duration not yet chosen */}
+      {/* Timeout Overlay - positioned on the outside of the team who called it */}
       {showTimeoutDisplay && timeoutTeam && timeoutClock === null && (() => {
         const team = timeoutTeam === 'home' ? homeTeam : awayTeam
         const colors = getTimeoutColors(team)
-        return (
-        <div 
-          className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-lg animate-bounce-in overflow-hidden"
-          style={{
-            background: `linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%)`,
-            boxShadow: `inset 0 0 100px rgba(255,255,255,0.15), 0 0 50px ${colors.primary}80`
-          }}
-        >
-          {/* Animated shimmer overlay */}
-          <div 
-            className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer"
-            style={{ backgroundSize: '200% 100%' }}
-          />
-          {/* Radial glow effect */}
-          <div 
-            className="absolute inset-0 opacity-40"
-            style={{
-              background: `radial-gradient(circle at center, rgba(255,255,255,0.5) 0%, transparent 60%)`
-            }}
-          />
-          <div className="flex items-center gap-4 mb-4 relative z-10">
-            {(timeoutTeam === 'home' ? homeTeam.logo_url : awayTeam.logo_url) ? (
-              <img 
-                src={timeoutTeam === 'home' ? homeTeam.logo_url : awayTeam.logo_url}
-                alt=""
-                className="h-20 w-auto max-w-24 object-contain drop-shadow-lg animate-pulse"
-              />
-            ) : (
-              <span className="text-4xl font-bold text-white animate-pulse" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
-                {timeoutTeam === 'home' ? homeTeam.abbreviation : awayTeam.abbreviation}
-              </span>
-            )}
-            <div className="text-center">
-              <p 
-                className="text-5xl font-black text-white tracking-wider drop-shadow-lg"
-                style={{
-                  textShadow: '0 0 20px rgba(255,255,255,0.8), 0 0 40px rgba(255,255,255,0.4), 0 4px 8px rgba(0,0,0,0.5)',
-                  animation: 'pulse 1.5s ease-in-out infinite'
-                }}
-              >
-                TIMEOUT
-              </p>
-              <p className="text-2xl font-semibold text-white/90 mt-1">
-                {timeoutTeam === 'home' ? homeTeam.name : awayTeam.name}
-              </p>
-            </div>
-          </div>
-          {/* Amplified Timeout Indicators */}
-          <div className="flex justify-center gap-4 mt-3 relative z-10">
-            {[1, 2, 3].map((t) => {
-              const remainingTimeouts = timeoutTeam === 'home' ? homeTimeouts : awayTimeouts
-              const isActive = t <= remainingTimeouts
-              return (
-                <div 
-                  key={t}
-                  className={`w-10 h-10 rounded-full border-4 border-white transition-all duration-300 ${
-                    isActive 
-                      ? 'bg-white shadow-[0_0_20px_rgba(255,255,255,0.8)]' 
-                      : 'bg-transparent opacity-40'
-                  }`}
-                  style={isActive ? { animation: `pulse 2s ease-in-out infinite ${t * 0.2}s` } : {}}
-                />
-              )
-            })}
-          </div>
-          <p className="text-xl text-white/90 mt-3 font-medium relative z-10">
-            {timeoutTeam === 'home' ? homeTimeouts : awayTimeouts} remaining
-          </p>
-          {/* Floating decorative elements */}
-          <div className="absolute top-4 left-6 text-3xl animate-bounce opacity-80">⏱️</div>
-          <div className="absolute top-6 right-8 text-2xl animate-bounce opacity-80" style={{ animationDelay: '0.2s' }}>⏸️</div>
-          <div className="absolute bottom-6 left-8 text-2xl animate-bounce opacity-80" style={{ animationDelay: '0.3s' }}>🏈</div>
-          <div className="absolute bottom-4 right-6 text-3xl animate-bounce opacity-80" style={{ animationDelay: '0.15s' }}>⏱️</div>
-        </div>
-        )
+        const remainingTimeouts = timeoutTeam === 'home' ? homeTimeouts : awayTimeouts
+        // Position: away team = left side (before scoreboard), home team = right side (after scoreboard)
+        return null // Rendered in the team sections instead
       })()}
+
+
 
       {/* Red Zone Bar */}
       {showRedZone && (
@@ -647,6 +568,30 @@ export function GameScoreboardDisplay({
             <span className="text-xl animate-pulse">🔴</span>
             <span className="text-xl font-bold text-white tracking-wider">RED ZONE</span>
             <span className="text-xl animate-pulse">🔴</span>
+          </div>
+        </div>
+      )}
+
+      {/* Injury Overlay */}
+      {showInjury && (
+        <div className="bg-gradient-to-r from-amber-600 via-yellow-500 to-amber-600 rounded-lg px-4 py-3 mb-4 animate-bounce-in ring-2 ring-amber-400 shadow-[0_0_25px_rgba(245,158,11,0.5)] relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+          <div className="flex items-center justify-center gap-3 relative z-10">
+            <span className="text-2xl animate-pulse">🚑</span>
+            <span className="text-2xl font-bold text-white tracking-wider">INJURY TIMEOUT</span>
+            <span className="text-2xl animate-pulse">⚕️</span>
+          </div>
+        </div>
+      )}
+
+      {/* Commercial Break Overlay */}
+      {showCommercial && (
+        <div className="bg-gradient-to-r from-slate-700 via-slate-600 to-slate-700 rounded-lg px-4 py-3 mb-4 animate-bounce-in ring-2 ring-slate-500 shadow-[0_0_25px_rgba(100,116,139,0.5)] relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+          <div className="flex items-center justify-center gap-3 relative z-10">
+            <span className="text-2xl">📺</span>
+            <span className="text-2xl font-bold text-white tracking-wider">COMMERCIAL BREAK</span>
+            <span className="text-2xl">📺</span>
           </div>
         </div>
       )}
@@ -818,12 +763,12 @@ export function GameScoreboardDisplay({
       
       {/* D&D Bar Container - holds both D&D and overlays that cover it */}
       <div className={`relative overflow-hidden rounded-xl transition-all duration-500 ${
-        hideDownDistance && removeDownDistanceSpace && !(flagDisplayStage > 0 || reviewDisplayStage > 0 || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break')
+        hideDownDistance && removeDownDistanceSpace && !(flagDisplayStage > 0 || reviewDisplayStage > 0 || challengeActive || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break' || showTimeoutDisplay)
           ? 'h-0 mb-0'
           : 'mb-4'
       }`}>
-      {/* Flag/Review/Big Play/Ad Break Overlays - positioned absolutely to cover D&D */}
-      {(flagDisplayStage > 0 || reviewDisplayStage > 0 || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break') && (
+      {/* Flag/Review/Challenge/Big Play/Ad Break/Timeout Overlays - positioned absolutely to cover D&D */}
+      {(flagDisplayStage > 0 || reviewDisplayStage > 0 || challengeActive || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break' || showTimeoutDisplay) && (
       <div className="absolute inset-0 z-10">
         {/* Commercial Break Overlay */}
         {gameStatus === 'ad-break' && (
@@ -881,7 +826,7 @@ export function GameScoreboardDisplay({
         )}
         
         {/* Review Overlay */}
-        {reviewDisplayStage > 0 && (
+        {reviewDisplayStage > 0 && !challengeActive && (
           <div className={`rounded-xl flex items-center justify-between gap-4 py-2.5 px-5 animate-bounce-in relative overflow-hidden ring-2 ${
             reviewResult === 'upheld' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_25px_rgba(34,197,94,0.5)]' :
             reviewResult === 'reversed' ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-orange-600 ring-orange-400 shadow-[0_0_25px_rgba(249,115,22,0.5)]' :
@@ -896,7 +841,7 @@ export function GameScoreboardDisplay({
                  'PLAY UNDER REVIEW'}
               </span>
             </div>
-            {(reviewReason || reviewCallOnField) && (
+            {(reviewReason || reviewCallOnField) && reviewDisplayStage === 2 && (
               <div className="flex items-center gap-4 text-white/90 relative z-10">
                 {reviewReason && (
                   <span className="text-sm font-semibold">Reviewing: {reviewReason}</span>
@@ -907,6 +852,36 @@ export function GameScoreboardDisplay({
               </div>
             )}
             <span className="text-2xl relative z-10">📹</span>
+          </div>
+        )}
+        
+        {/* Challenge Overlay - same style as review but with CHALLENGE text */}
+        {challengeActive && challengeTeam && (
+          <div className={`rounded-xl flex items-center justify-between gap-4 py-2.5 px-5 animate-bounce-in relative overflow-hidden ring-2 ${
+            reviewResult === 'upheld' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_25px_rgba(34,197,94,0.5)]' :
+            reviewResult === 'reversed' ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-orange-600 ring-orange-400 shadow-[0_0_25px_rgba(249,115,22,0.5)]' :
+            'bg-gradient-to-r from-red-600 via-red-500 to-red-600 ring-red-400 shadow-[0_0_25px_rgba(239,68,68,0.5)]'
+          }`}>
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+            <div className="flex items-center gap-2 relative z-10">
+              <span className="text-2xl">🚩</span>
+              <span className="text-xl font-black text-white tracking-wider">
+                {reviewResult === 'upheld' ? 'RULING STANDS ✓' :
+                 reviewResult === 'reversed' ? 'CALL REVERSED ↩️' :
+                 `${challengeTeam === 'home' ? homeTeam.abbreviation : awayTeam.abbreviation} CHALLENGE`}
+              </span>
+            </div>
+            {(reviewReason || reviewCallOnField) && reviewDisplayStage === 2 && (
+              <div className="flex items-center gap-4 text-white/90 relative z-10">
+                {reviewReason && (
+                  <span className="text-sm font-semibold">Challenging: {reviewReason}</span>
+                )}
+                {reviewCallOnField && (
+                  <span className="text-sm font-medium">Call: {reviewCallOnField}</span>
+                )}
+              </div>
+            )}
+            <span className="text-2xl relative z-10">🚩</span>
           </div>
         )}
         
@@ -966,24 +941,24 @@ export function GameScoreboardDisplay({
         
         {/* Turnover Overlay */}
         {showTurnover && showTurnover !== 'selecting' && (
-          <div className={`rounded-xl flex items-center justify-center gap-3 py-2.5 px-5 animate-bounce-in relative overflow-hidden ring-2 ${
+          <div className={`rounded-xl flex items-center justify-center gap-2 py-2.5 px-4 animate-bounce-in relative overflow-hidden ring-2 ${
             showTurnover === 'reversed' ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-orange-600 ring-orange-400 shadow-[0_0_25px_rgba(249,115,22,0.5)]' : 
             'bg-gradient-to-r from-red-700 via-red-600 to-red-700 ring-red-400 shadow-[0_0_25px_rgba(239,68,68,0.5)]'
           }`}>
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
-            <span className="text-2xl animate-bounce relative z-10">
+            <span className="text-xl animate-bounce relative z-10">
               {showTurnover === 'downs' && '🔄'}
               {showTurnover === 'interception' && '🙌'}
               {showTurnover === 'fumble' && '🏈'}
               {showTurnover === 'reversed' && '↩️'}
             </span>
-            <span className="text-2xl font-bold text-white tracking-wider relative z-10">
+            <span className="text-lg font-bold text-white tracking-wider relative z-10 whitespace-nowrap">
               {showTurnover === 'downs' && 'TURNOVER ON DOWNS'}
               {showTurnover === 'interception' && 'INTERCEPTION'}
-              {showTurnover === 'fumble' && 'FUMBLE - TURNOVER'}
-              {showTurnover === 'reversed' && 'TURNOVER REVERSED'}
+              {showTurnover === 'fumble' && 'FUMBLE'}
+              {showTurnover === 'reversed' && 'REVERSED'}
             </span>
-            <span className="text-2xl animate-bounce relative z-10" style={{ animationDelay: '0.15s' }}>
+            <span className="text-xl animate-bounce relative z-10" style={{ animationDelay: '0.15s' }}>
               {showTurnover === 'downs' && '🔄'}
               {showTurnover === 'interception' && '🙌'}
               {showTurnover === 'fumble' && '🏈'}
@@ -1027,13 +1002,47 @@ export function GameScoreboardDisplay({
           </div>
         )}
         
+        {/* Timeout Overlay - Centered in D&D bar area */}
+        {showTimeoutDisplay && timeoutTeam && (() => {
+          const team = timeoutTeam === 'home' ? homeTeam : awayTeam
+          const colors = getTimeoutColors(team)
+          const remainingTimeouts = timeoutTeam === 'home' ? homeTimeouts : awayTimeouts
+          return (
+            <div 
+              className="rounded-xl flex items-center justify-center gap-3 py-2.5 px-5 animate-bounce-in relative overflow-hidden ring-2"
+              style={{
+                background: `linear-gradient(to right, ${colors.primary}, ${colors.secondary}, ${colors.primary})`,
+                boxShadow: `0 0 25px ${colors.primary}80`,
+                ringColor: colors.primary
+              }}
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+              <span className="text-xl relative z-10">⏱️</span>
+              <span className="text-lg font-black text-white tracking-wider relative z-10">
+                {team.abbreviation} TIMEOUT
+              </span>
+              <div className="flex gap-1 relative z-10">
+                {[1, 2, 3].map((t) => (
+                  <div 
+                    key={t}
+                    className={`w-3 h-3 rounded-full border border-white ${
+                      t <= remainingTimeouts ? 'bg-white' : 'bg-transparent opacity-40'
+                    }`}
+                  />
+                ))}
+              </div>
+              <span className="text-xl relative z-10">⏱️</span>
+            </div>
+          )
+        })()}
+        
       </div>
       )}
       
       {/* Down & Distance Bar - animates collapse/expand horizontally from center */}
       <div 
         className={`transition-all duration-700 ease-in-out ${
-          hideDownDistance && !(flagDisplayStage > 0 || reviewDisplayStage > 0 || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break')
+          hideDownDistance && !(flagDisplayStage > 0 || reviewDisplayStage > 0 || challengeActive || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break' || showTimeoutDisplay)
             ? removeDownDistanceSpace ? 'hidden' : 'w-0 opacity-0 overflow-hidden h-0 mb-0'
             : 'w-full opacity-100 mb-4'
         }`}
@@ -1069,7 +1078,7 @@ export function GameScoreboardDisplay({
               style={{ backgroundSize: '200% 100%' }}
             />
           )}
-          {possession && !showFumbleRecovery && (
+          {possession && !showFumbleRecovery && !hidePossession && (
             <>
               <span 
                 className="text-xl font-black tracking-tight"
@@ -1104,7 +1113,7 @@ export function GameScoreboardDisplay({
             } : {}}
           >
             {showFumbleRecovery === 'offense' ? '🏈 RECOVERED BY OFFENSE' : 
-             showFumbleRecovery === 'defense' ? '🔄 RECOVERED BY DEFENSE' : 
+             showFumbleRecovery === 'defense' ? '🔄 TURNOVER' : 
              showFumbleRecovery === 'oob' ? '📍 FUMBLE OUT OF BOUNDS' :
              showTurnoverOnDowns ? 'TURNOVER ON DOWNS' : showIncomplete ? 'INCOMPLETE' : showOutOfBounds ? 'OUT OF BOUNDS' : getDownText()}
           </span>
@@ -1114,76 +1123,97 @@ export function GameScoreboardDisplay({
       
       {/* Teams and Scores */}
       <div className="grid grid-cols-3 gap-4 items-center overflow-visible">
-        {/* Away Team (Left) */}
-        <div className="text-center transition-all duration-500 overflow-visible">
-          {awayTeam.logo_url ? (
-            <img 
-              src={awayTeam.logo_url}
-              alt={awayTeam.name}
-              className={`w-auto mx-auto object-contain mb-2 transition-all duration-500 ${
-                hideDownDistance ? 'h-24 max-w-32' : 'h-16 max-w-24'
-              } ${
-                flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
-                  ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
-                  : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
-              }`}
-            />
-          ) : (
+        {/* Away Team (Left) - with extra info on left side */}
+        <div className="flex items-center gap-2 overflow-visible">
+          {/* Extra Info Box - Left of Away Team */}
+          {extraInfo?.show && extraInfo?.side === 'away' && extraInfo?.lines?.some(l => l.text) && (
             <div 
-              className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
-                hideDownDistance ? 'w-24 h-24' : 'w-16 h-16'
-              } ${
-                flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
-                  ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
-                  : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
-              }`}
+              className="w-20 rounded-lg p-2 flex flex-col items-center justify-center text-center animate-slide-up transition-all duration-300 shrink-0"
+              style={{ backgroundColor: extraInfo.bgColor }}
             >
-              <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: awayTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>
-                {awayTeam.abbreviation}
-              </span>
-            </div>
-          )}
-          <p className="text-sm font-medium">{awayTeam.name}</p>
-          {showRecords && teamRecords?.away && (
-            <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.away)}</p>
-          )}
-          {possession === 'away' && !hidePossession && (
-            <div className="flex items-center justify-center gap-1.5 mt-1">
-              <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
-            </div>
-          )}
-          {!hideScore && (
-            <div className="mt-2 py-2 overflow-visible transition-all duration-500">
-              <AnimatedScore score={game.away_score} color={awayTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
-            </div>
-          )}
-          {/* Timeouts - shrink/expand animation for hide/show */}
-          {game.status !== 'final' && game.quarter !== 'Final' && gameStatus !== 'halftime-show' && game.quarter !== 'Halftime' && (
-            <div className={`flex justify-center gap-1.5 mt-2 transition-all duration-300 ease-in-out origin-center ${
-              hideTimeouts ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'
-            }`}>
-              {[1, 2, 3].map((t) => {
-                const isActive = t <= awayTimeouts
-                const isChallenged = challengeActive && challengeTeam === 'away' && t === awayTimeouts
-                const toColor = awayTeam.color3 || awayTeam.color2 || '#fbbf24'
-                return (
-                  <div 
-                    key={t}
-                    className={`h-2 w-6 rounded-full transition-all duration-300 ${
-                      isChallenged ? 'animate-pulse' : !isActive ? 'bg-slate-600/50' : ''
-                    }`}
-                    style={
-                      isChallenged 
-                        ? { backgroundColor: '#ef4444', boxShadow: '0 0 12px rgba(239,68,68,0.8), 0 0 20px rgba(239,68,68,0.4)' }
-                        : isActive 
-                          ? { backgroundColor: toColor, boxShadow: '0 0 8px rgba(255,255,255,0.6), 0 0 16px rgba(255,255,255,0.3)' }
-                          : {}
-                    }
-                  />
+              {extraInfo.lines.map((line, index) => (
+                line.text && (
+                  <p 
+                    key={index} 
+                    className={`font-bold ${line.fontSize === 'xl' ? 'text-lg' : line.fontSize === 'lg' ? 'text-base' : 'text-sm'}`}
+                    style={{ color: line.textColor || extraInfo.textColor }}
+                  >
+                    {line.text}
+                  </p>
                 )
-              })}
+              ))}
             </div>
           )}
+          <div className="text-center transition-all duration-500 overflow-visible flex-1">
+            {awayTeam.logo_url ? (
+              <img 
+                src={awayTeam.logo_url}
+                alt={awayTeam.name}
+                className={`w-auto mx-auto object-contain mb-2 transition-all duration-500 ${
+                  hideDownDistance ? 'h-24 max-w-32' : 'h-16 max-w-24'
+                } ${
+                  flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
+                    ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
+                    : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
+                }`}
+              />
+            ) : (
+              <div 
+                className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
+                  hideDownDistance ? 'w-24 h-24' : 'w-16 h-16'
+                } ${
+                  flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
+                    ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
+                    : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
+                }`}
+              >
+                <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: awayTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>
+                  {awayTeam.abbreviation}
+                </span>
+              </div>
+            )}
+            <p className="text-sm font-medium">{awayTeam.name}</p>
+            {showRecords && teamRecords?.away && (
+              <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.away)}</p>
+            )}
+            {possession === 'away' && !hidePossession && (
+              <div className="flex items-center justify-center gap-1.5 mt-1">
+                <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
+              </div>
+            )}
+            {!hideScore && (
+              <div className="mt-2 py-2 overflow-visible transition-all duration-500">
+                <AnimatedScore score={game.away_score} color={awayTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
+              </div>
+            )}
+            {/* Timeouts - shrink/expand animation for hide/show */}
+            {game.status !== 'final' && game.quarter !== 'Final' && gameStatus !== 'halftime-show' && game.quarter !== 'Halftime' && (
+              <div className={`flex justify-center gap-1.5 mt-2 transition-all duration-300 ease-in-out origin-center ${
+                hideTimeouts ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'
+              }`}>
+                {[1, 2, 3].map((t) => {
+                  const isActive = t <= awayTimeouts
+                  const isChallenged = challengeActive && challengeTeam === 'away' && t === awayTimeouts
+                  const toColor = awayTeam.color3 || awayTeam.color2 || '#fbbf24'
+                  return (
+                    <div 
+                      key={t}
+                      className={`h-2 w-6 rounded-full transition-all duration-300 ${
+                        isChallenged ? 'animate-pulse' : !isActive ? 'bg-slate-600/50' : ''
+                      }`}
+                      style={
+                        isChallenged 
+                          ? { backgroundColor: '#ef4444', boxShadow: '0 0 12px rgba(239,68,68,0.8), 0 0 20px rgba(239,68,68,0.4)' }
+                          : isActive 
+                            ? { backgroundColor: toColor, boxShadow: '0 0 8px rgba(255,255,255,0.6), 0 0 16px rgba(255,255,255,0.3)' }
+                            : {}
+                      }
+                    />
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Center - Clock */}
@@ -1301,91 +1331,195 @@ export function GameScoreboardDisplay({
           )}
         </div>
 
-        {/* Home Team (Right) */}
-        <div className="text-center transition-all duration-500 overflow-visible">
-          {homeTeam.logo_url ? (
-            <img 
-              src={homeTeam.logo_url}
-              alt={homeTeam.name}
-              className={`w-auto mx-auto object-contain mb-2 transition-all duration-500 ${
-                hideDownDistance ? 'h-24 max-w-32' : 'h-16 max-w-24'
-              } ${
-                flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
-                  ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
-                  : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
-              }`}
-            />
-          ) : (
+        {/* Home Team (Right) - with extra info on right side */}
+        <div className="flex items-center gap-2 overflow-visible">
+          <div className="text-center transition-all duration-500 overflow-visible flex-1">
+            {homeTeam.logo_url ? (
+              <img 
+                src={homeTeam.logo_url}
+                alt={homeTeam.name}
+                className={`w-auto mx-auto object-contain mb-2 transition-all duration-500 ${
+                  hideDownDistance ? 'h-24 max-w-32' : 'h-16 max-w-24'
+                } ${
+                  flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
+                    ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
+                    : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
+                }`}
+              />
+            ) : (
+              <div 
+                className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
+                  hideDownDistance ? 'h-24' : 'h-16'
+                } ${
+                  flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
+                    ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
+                    : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
+                }`}
+              >
+                <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: homeTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>
+                  {homeTeam.abbreviation}
+                </span>
+              </div>
+            )}
+            <p className="text-sm font-medium">{homeTeam.name}</p>
+            {showRecords && teamRecords?.home && (
+              <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.home)}</p>
+            )}
+            {possession === 'home' && !hidePossession && (
+              <div className="flex items-center justify-center gap-1.5 mt-1">
+                <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
+              </div>
+            )}
+            {!hideScore && (
+              <div className="mt-2 py-2 overflow-visible transition-all duration-500">
+                <AnimatedScore score={game.home_score} color={homeTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
+              </div>
+            )}
+            {/* Timeouts - shrink/expand animation for hide/show */}
+            {game.status !== 'final' && game.quarter !== 'Final' && gameStatus !== 'halftime-show' && game.quarter !== 'Halftime' && (
+              <div className={`flex justify-center gap-1.5 mt-2 transition-all duration-300 ease-in-out origin-center ${
+                hideTimeouts ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'
+              }`}>
+                {[1, 2, 3].map((t) => {
+                  const isActive = t <= homeTimeouts
+                  const isChallenged = challengeActive && challengeTeam === 'home' && t === homeTimeouts
+                  const toColor = homeTeam.color3 || homeTeam.color2 || '#fbbf24'
+                  return (
+                    <div 
+                      key={t}
+                      className={`h-2 w-6 rounded-full transition-all duration-300 ${
+                        isChallenged ? 'animate-pulse' : !isActive ? 'bg-slate-600/50' : ''
+                      }`}
+                      style={
+                        isChallenged 
+                          ? { backgroundColor: '#ef4444', boxShadow: '0 0 12px rgba(239,68,68,0.8), 0 0 20px rgba(239,68,68,0.4)' }
+                          : isActive 
+                            ? { backgroundColor: toColor, boxShadow: '0 0 8px rgba(255,255,255,0.6), 0 0 16px rgba(255,255,255,0.3)' }
+                            : {}
+                      }
+                    />
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          {/* Extra Info Box - Right of Home Team */}
+          {extraInfo?.show && extraInfo?.side === 'home' && extraInfo?.lines?.some(l => l.text) && (
             <div 
-              className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
-                hideDownDistance ? 'h-24' : 'h-16'
-              } ${
-                flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
-                  ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
-                  : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
-              }`}
+              className="w-20 rounded-lg p-2 flex flex-col items-center justify-center text-center animate-slide-up transition-all duration-300 shrink-0"
+              style={{ backgroundColor: extraInfo.bgColor }}
             >
-              <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: homeTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>
-                {homeTeam.abbreviation}
-              </span>
-            </div>
-          )}
-          <p className="text-sm font-medium">{homeTeam.name}</p>
-          {showRecords && teamRecords?.home && (
-            <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.home)}</p>
-          )}
-          {possession === 'home' && !hidePossession && (
-            <div className="flex items-center justify-center gap-1.5 mt-1">
-              <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
-            </div>
-          )}
-          {!hideScore && (
-            <div className="mt-2 py-2 overflow-visible transition-all duration-500">
-              <AnimatedScore score={game.home_score} color={homeTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
-            </div>
-          )}
-          {/* Timeouts - shrink/expand animation for hide/show */}
-          {game.status !== 'final' && game.quarter !== 'Final' && gameStatus !== 'halftime-show' && game.quarter !== 'Halftime' && (
-            <div className={`flex justify-center gap-1.5 mt-2 transition-all duration-300 ease-in-out origin-center ${
-              hideTimeouts ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'
-            }`}>
-              {[1, 2, 3].map((t) => {
-                const isActive = t <= homeTimeouts
-                const isChallenged = challengeActive && challengeTeam === 'home' && t === homeTimeouts
-                const toColor = homeTeam.color3 || homeTeam.color2 || '#fbbf24'
-                return (
-                  <div 
-                    key={t}
-                    className={`h-2 w-6 rounded-full transition-all duration-300 ${
-                      isChallenged ? 'animate-pulse' : !isActive ? 'bg-slate-600/50' : ''
-                    }`}
-                    style={
-                      isChallenged 
-                        ? { backgroundColor: '#ef4444', boxShadow: '0 0 12px rgba(239,68,68,0.8), 0 0 20px rgba(239,68,68,0.4)' }
-                        : isActive 
-                          ? { backgroundColor: toColor, boxShadow: '0 0 8px rgba(255,255,255,0.6), 0 0 16px rgba(255,255,255,0.3)' }
-                          : {}
-                    }
-                  />
+              {extraInfo.lines.map((line, index) => (
+                line.text && (
+                  <p 
+                    key={index} 
+                    className={`font-bold ${line.fontSize === 'xl' ? 'text-lg' : line.fontSize === 'lg' ? 'text-base' : 'text-sm'}`}
+                    style={{ color: line.textColor || extraInfo.textColor }}
+                  >
+                    {line.text}
+                  </p>
                 )
-              })}
+              ))}
             </div>
           )}
         </div>
       </div>
       </div>
       
-      {/* Right Extra Info Box (Home side) */}
-      {extraInfo?.show && extraInfo?.side === 'home' && extraInfo?.lines?.some(l => l.text) && (
+      {/* Stats Bottom Bar - integrated display */}
+      {displayStats?.show && (displayStats.quarterScores || displayStats.turnovers || displayStats.firstDowns || displayStats.penalties || displayStats.customStats?.length > 0) && (
+        <div className="w-full mt-3 bg-slate-800/90 rounded-xl p-3 animate-slide-up">
+          {/* Quarter Scores Table */}
+          {displayStats.quarterScores && (
+            <div className="mb-3">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-slate-400 text-xs border-b border-slate-700">
+                    <th className="text-left py-1.5 pl-2 w-24">Team</th>
+                    <th className="text-center w-10">Q1</th>
+                    <th className="text-center w-10">Q2</th>
+                    <th className="text-center w-10">Q3</th>
+                    <th className="text-center w-10">Q4</th>
+                    <th className="text-center w-10">OT</th>
+                    <th className="text-center w-12 font-bold">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="text-white">
+                  <tr className="border-b border-slate-700/50">
+                    <td className="py-1.5 pl-2 font-semibold" style={{ color: awayTeam.color }}>{awayTeam.abbreviation}</td>
+                    <td className="text-center">{quickStats?.away?.q1 || 0}</td>
+                    <td className="text-center">{quickStats?.away?.q2 || 0}</td>
+                    <td className="text-center">{quickStats?.away?.q3 || 0}</td>
+                    <td className="text-center">{quickStats?.away?.q4 || 0}</td>
+                    <td className="text-center">{quickStats?.away?.ot || 0}</td>
+                    <td className="text-center font-bold text-lg">{game.away_score}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1.5 pl-2 font-semibold" style={{ color: homeTeam.color }}>{homeTeam.abbreviation}</td>
+                    <td className="text-center">{quickStats?.home?.q1 || 0}</td>
+                    <td className="text-center">{quickStats?.home?.q2 || 0}</td>
+                    <td className="text-center">{quickStats?.home?.q3 || 0}</td>
+                    <td className="text-center">{quickStats?.home?.q4 || 0}</td>
+                    <td className="text-center">{quickStats?.home?.ot || 0}</td>
+                    <td className="text-center font-bold text-lg">{game.home_score}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+          
+          {/* Team Stats - Away on left, stat name in middle, Home on right */}
+          {(displayStats.turnovers || displayStats.firstDowns || displayStats.penalties || displayStats.customStats?.length > 0) && (
+            <div className={`space-y-1.5 ${displayStats.quarterScores ? 'pt-2 border-t border-slate-700' : ''}`}>
+              {displayStats.turnovers && (
+                <div className="flex items-center justify-between px-2">
+                  <span className="text-xl font-bold w-12 text-left" style={{ color: awayTeam.color }}>{quickStats?.away?.turnovers || 0}</span>
+                  <span className="text-sm font-medium text-slate-300 flex-1 text-center">Turnovers</span>
+                  <span className="text-xl font-bold w-12 text-right" style={{ color: homeTeam.color }}>{quickStats?.home?.turnovers || 0}</span>
+                </div>
+              )}
+              {displayStats.firstDowns && (
+                <div className="flex items-center justify-between px-2">
+                  <span className="text-xl font-bold w-12 text-left" style={{ color: awayTeam.color }}>{quickStats?.away?.firstDowns || 0}</span>
+                  <span className="text-sm font-medium text-slate-300 flex-1 text-center">First Downs</span>
+                  <span className="text-xl font-bold w-12 text-right" style={{ color: homeTeam.color }}>{quickStats?.home?.firstDowns || 0}</span>
+                </div>
+              )}
+              {displayStats.penalties && (
+                <div className="flex items-center justify-between px-2">
+                  <span className="text-xl font-bold w-16 text-left" style={{ color: awayTeam.color }}>{quickStats?.away?.penalties || 0}-{quickStats?.away?.penaltyYards || 0}</span>
+                  <span className="text-sm font-medium text-slate-300 flex-1 text-center">Penalties-Yards</span>
+                  <span className="text-xl font-bold w-16 text-right" style={{ color: homeTeam.color }}>{quickStats?.home?.penalties || 0}-{quickStats?.home?.penaltyYards || 0}</span>
+                </div>
+              )}
+              {/* Custom stats */}
+              {displayStats.customStats?.map(statId => {
+                const stat = quickStats?.custom?.find(s => s.id === statId)
+                if (!stat) return null
+                return (
+                  <div key={statId} className="flex items-center justify-between px-2">
+                    <span className="text-xl font-bold w-12 text-left" style={{ color: awayTeam.color }}>{stat.away || 0}</span>
+                    <span className="text-sm font-medium text-slate-300 flex-1 text-center">{stat.label}</span>
+                    <span className="text-xl font-bold w-12 text-right" style={{ color: homeTeam.color }}>{stat.home || 0}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Extra Info Box - Bottom */}
+      {extraInfo?.show && extraInfo?.side === 'bottom' && extraInfo?.lines?.some(l => l.text) && (
         <div 
-          className="w-32 rounded-xl p-3 flex flex-col items-center justify-center text-center animate-slide-up transition-all duration-300"
+          className="rounded-lg p-3 flex flex-col items-center justify-center text-center animate-slide-up transition-all duration-300 mt-3"
           style={{ backgroundColor: extraInfo.bgColor }}
         >
           {extraInfo.lines.map((line, index) => (
             line.text && (
               <p 
                 key={index} 
-                className={`font-bold ${getExtraInfoFontSize(line.fontSize)}`}
+                className={`font-bold ${line.fontSize === 'xl' ? 'text-xl' : line.fontSize === 'lg' ? 'text-lg' : 'text-base'}`}
                 style={{ color: line.textColor || extraInfo.textColor }}
               >
                 {line.text}
@@ -1394,6 +1528,15 @@ export function GameScoreboardDisplay({
           ))}
         </div>
       )}
+
+      {/* Viewer Count */}
+      {viewerCount > 0 && (
+        <div className="flex items-center justify-center gap-1.5 mt-3 text-slate-400 text-xs">
+          <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          <span>{viewerCount} {viewerCount === 1 ? 'viewer' : 'viewers'}</span>
+        </div>
+      )}
     </div>
+    </ScoreboardErrorBoundary>
   )
 }

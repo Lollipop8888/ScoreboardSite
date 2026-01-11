@@ -268,6 +268,12 @@ export default function LeaguesPage() {
                   ? 'Create your first league to get started.' 
                   : 'Create an account or sign in to manage your leagues. Your data is private and only visible to you.'}
             </p>
+            {canEdit && user && (
+              <Button className="mt-4 gap-2" onClick={() => setDialogOpen(true)}>
+                <Plus className="h-4 w-4" />
+                Create League
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (

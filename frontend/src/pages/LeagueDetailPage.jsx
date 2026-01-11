@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { Plus, Trophy, Users, Calendar, GitBranch, Share2, Trash2, Play, Upload, X, Pencil, Copy, Check, Settings, Send, Eye } from 'lucide-react'
+import { Plus, Trophy, Users, Calendar, GitBranch, Share2, Trash2, Play, Upload, X, Pencil, Copy, Check, Settings, Send, Eye, Minus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -25,6 +25,50 @@ import {
 import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, inviteApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { QRCodeSVG } from 'qrcode.react'
+import { HelpButton, FirstTimeTutorial } from '@/components/HelpTips'
+
+// Default preset penalties - comprehensive list
+const DEFAULT_PENALTIES = [
+  // Offense penalties
+  { name: 'Offensive Holding', yards: 10, side: 'offense', custom: false },
+  { name: 'False Start', yards: 5, side: 'offense', custom: false },
+  { name: 'Offensive Pass Interference', yards: 10, side: 'offense', custom: false },
+  { name: 'Illegal Formation', yards: 5, side: 'offense', custom: false },
+  { name: 'Delay of Game', yards: 5, side: 'offense', custom: false },
+  { name: 'Illegal Motion', yards: 5, side: 'offense', custom: false },
+  { name: 'Illegal Shift', yards: 5, side: 'offense', custom: false },
+  { name: 'Illegal Block in the Back', yards: 10, side: 'offense', custom: false },
+  { name: 'Intentional Grounding', yards: 10, side: 'offense', lossOfDown: true, custom: false },
+  { name: 'Ineligible Receiver Downfield', yards: 5, side: 'offense', custom: false },
+  { name: 'Illegal Forward Pass', yards: 5, side: 'offense', lossOfDown: true, custom: false },
+  { name: 'Illegal Touch', yards: 5, side: 'offense', lossOfDown: true, custom: false },
+  { name: 'Illegal Use of Hands', yards: 10, side: 'offense', custom: false },
+  { name: 'Tripping', yards: 10, side: 'offense', custom: false },
+  { name: 'Chop Block', yards: 15, side: 'offense', custom: false },
+  { name: 'Clipping', yards: 15, side: 'offense', custom: false },
+  // Defense penalties
+  { name: 'Defensive Holding', yards: 5, side: 'defense', custom: false },
+  { name: 'Offsides', yards: 5, side: 'defense', custom: false },
+  { name: 'Defensive Pass Interference', yards: 15, side: 'defense', custom: false },
+  { name: 'Encroachment', yards: 5, side: 'defense', custom: false },
+  { name: 'Neutral Zone Infraction', yards: 5, side: 'defense', custom: false },
+  { name: 'Roughing the Passer', yards: 15, side: 'defense', custom: false },
+  { name: 'Roughing the Kicker', yards: 15, side: 'defense', custom: false },
+  { name: 'Running into the Kicker', yards: 5, side: 'defense', custom: false },
+  { name: 'Illegal Contact', yards: 5, side: 'defense', custom: false },
+  { name: 'Leverage', yards: 15, side: 'defense', custom: false },
+  { name: 'Leaping', yards: 15, side: 'defense', custom: false },
+  // Either team penalties
+  { name: 'Unsportsmanlike Conduct', yards: 15, side: 'either', custom: false, subPenalties: ['Taunting', 'Excessive Celebration', 'Fighting'] },
+  { name: 'Facemask', yards: 15, side: 'either', custom: false },
+  { name: 'Personal Foul', yards: 15, side: 'either', custom: false, subPenalties: ['Unnecessary Roughness', 'Late Hit', 'Horse Collar Tackle', 'Helmet-to-Helmet', 'Targeting', 'Spearing'] },
+  { name: 'Illegal Substitution', yards: 5, side: 'either', custom: false },
+  { name: 'Too Many Players on Field', yards: 5, side: 'either', custom: false },
+  { name: 'Illegal Participation', yards: 5, side: 'either', custom: false },
+  { name: 'Sideline Infraction', yards: 5, side: 'either', custom: false },
+  { name: 'Illegal Kick', yards: 10, side: 'either', custom: false },
+  { name: 'Illegal Batting', yards: 10, side: 'either', custom: false },
+]
 
 export default function LeagueDetailPage() {
   const { leagueId } = useParams()
@@ -62,7 +106,13 @@ export default function LeagueDetailPage() {
   const [selectedRecordType, setSelectedRecordType] = useState(null) // null = main/Overall
   const [newRecordTypeName, setNewRecordTypeName] = useState('')
   const [settingsTab, setSettingsTab] = useState('general')
-  const [newPenalty, setNewPenalty] = useState('')
+  const [penaltiesDialogOpen, setPenaltiesDialogOpen] = useState(false)
+  const [addPenaltyDialogOpen, setAddPenaltyDialogOpen] = useState(false)
+  const [addSubPenaltyDialogOpen, setAddSubPenaltyDialogOpen] = useState(false)
+  const [editPenaltyDialogOpen, setEditPenaltyDialogOpen] = useState(false)
+  const [penaltyForm, setPenaltyForm] = useState({ name: '', yards: 5, lossOfDown: false, scope: 'league', side: 'either' })
+  const [editPenaltyForm, setEditPenaltyForm] = useState({ index: null, name: '', yards: 5, lossOfDown: false, side: 'either', parentIndex: null })
+  const [subPenaltyForm, setSubPenaltyForm] = useState({ parentIndex: null, name: '' })
   const [inviteUsername, setInviteUsername] = useState('')
   const [invitePermission, setInvitePermission] = useState('view')
   const [inviteError, setInviteError] = useState('')
@@ -513,6 +563,14 @@ export default function LeagueDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* First-time tutorial */}
+      <FirstTimeTutorial context="league" storageKey="tutorial_seen_league" />
+      
+      {/* Floating help button */}
+      <div className="fixed bottom-6 right-6 z-50">
+        <HelpButton context="league" className="shadow-lg" />
+      </div>
+
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -531,6 +589,7 @@ export default function LeagueDetailPage() {
           variant="outline"
           className="gap-2"
           onClick={() => openShareDialog('league', league.share_code, league.name)}
+          data-tutorial="share-button"
         >
           <Share2 className="h-4 w-4" />
           Share League
@@ -538,20 +597,20 @@ export default function LeagueDetailPage() {
       </div>
 
       <Tabs defaultValue="standings" className="space-y-4">
-        <TabsList>
+        <TabsList data-tutorial="league-tabs">
           <TabsTrigger value="standings" className="gap-2">
             <Trophy className="h-4 w-4" />
             Standings
           </TabsTrigger>
-          <TabsTrigger value="teams" className="gap-2">
+          <TabsTrigger value="teams" className="gap-2" data-tutorial="teams-tab">
             <Users className="h-4 w-4" />
             Teams
           </TabsTrigger>
-          <TabsTrigger value="games" className="gap-2">
+          <TabsTrigger value="games" className="gap-2" data-tutorial="games-tab">
             <Calendar className="h-4 w-4" />
             Games
           </TabsTrigger>
-          <TabsTrigger value="brackets" className="gap-2">
+          <TabsTrigger value="brackets" className="gap-2" data-tutorial="brackets-tab">
             <GitBranch className="h-4 w-4" />
             Brackets
           </TabsTrigger>
@@ -570,7 +629,11 @@ export default function LeagueDetailPage() {
             </CardHeader>
             <CardContent>
               {standings.length === 0 ? (
-                <p className="text-center text-slate-500 py-8">No teams yet. Add teams to see standings.</p>
+                <div className="text-center py-12">
+                  <Trophy className="mx-auto h-12 w-12 text-slate-300 mb-4" />
+                  <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300">No standings yet</h3>
+                  <p className="text-slate-500 mt-1">Add teams to this league to see standings.</p>
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
@@ -828,7 +891,11 @@ export default function LeagueDetailPage() {
             </CardHeader>
             <CardContent>
               {league.teams?.length === 0 ? (
-                <p className="text-center text-slate-500 py-8">No teams yet. Add your first team.</p>
+                <div className="text-center py-12">
+                  <Users className="mx-auto h-12 w-12 text-slate-300 mb-4" />
+                  <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300">No teams yet</h3>
+                  <p className="text-slate-500 mt-1">Add your first team to get started.</p>
+                </div>
               ) : (
                 <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                   {league.teams?.map((team) => (
@@ -1334,26 +1401,27 @@ export default function LeagueDetailPage() {
                   return true
                 })
 
-                // Sort games: by game_unit, then by scheduled_at
-                // For completed games: descending (most recent first)
-                // For scheduled/live games: ascending (upcoming first)
+                // Sort games chronologically: by week (game_unit), then by date/time
+                // First games come first (ascending order)
                 const isCompleted = gamesFilter === 'completed'
                 const sortedGames = [...filteredGames].sort((a, b) => {
-                  // First sort by game_unit (nulls last)
+                  // First sort by game_unit_type (nulls last)
+                  const typeA = a.game_unit_type || 1
+                  const typeB = b.game_unit_type || 1
+                  if (typeA !== typeB) return typeA - typeB
+                  
+                  // Then by game_unit/week (nulls last)
                   if (a.game_unit !== b.game_unit) {
                     if (a.game_unit === null) return 1
                     if (b.game_unit === null) return -1
-                    return isCompleted 
-                      ? b.game_unit - a.game_unit  // Descending for completed
-                      : a.game_unit - b.game_unit  // Ascending for scheduled/live
+                    return a.game_unit - b.game_unit  // Week 1 before Week 2, etc.
                   }
-                  // Then by scheduled_at
+                  
+                  // Then by scheduled_at (date and time)
                   if (a.scheduled_at !== b.scheduled_at) {
                     if (!a.scheduled_at) return 1
                     if (!b.scheduled_at) return -1
-                    return isCompleted
-                      ? new Date(b.scheduled_at) - new Date(a.scheduled_at)  // Most recent first
-                      : new Date(a.scheduled_at) - new Date(b.scheduled_at)  // Upcoming first
+                    return new Date(a.scheduled_at) - new Date(b.scheduled_at)  // Earlier first
                   }
                   return 0
                 })
@@ -1380,11 +1448,15 @@ export default function LeagueDetailPage() {
 
                 if (games.length === 0) {
                   return (
-                    <p className="text-center text-slate-500 py-8">
-                      {league.teams?.length < 2 
-                        ? 'Add at least 2 teams to create games.' 
-                        : 'No games scheduled yet.'}
-                    </p>
+                    <div className="text-center py-12">
+                      <Calendar className="mx-auto h-12 w-12 text-slate-300 mb-4" />
+                      <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300">No games yet</h3>
+                      <p className="text-slate-500 mt-1">
+                        {league.teams?.length < 2 
+                          ? 'Add at least 2 teams to create games.' 
+                          : 'Schedule your first game to get started.'}
+                      </p>
+                    </div>
                   )
                 }
 
@@ -1510,13 +1582,20 @@ export default function LeagueDetailPage() {
                         const label = key === 'Unassigned' 
                           ? 'Unassigned' 
                           : `${getUnitLabel(group.type)} ${group.num}`
+                        // Sort games within each group by date/time
+                        const sortedGroupGames = [...group.games].sort((a, b) => {
+                          if (!a.scheduled_at && !b.scheduled_at) return 0
+                          if (!a.scheduled_at) return 1
+                          if (!b.scheduled_at) return -1
+                          return new Date(a.scheduled_at) - new Date(b.scheduled_at)
+                        })
                         return (
                           <div key={key}>
                             <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-400 mb-2 border-b pb-1">
                               {label}
                             </h3>
                             <div className="space-y-3">
-                              {group.games.map(renderGame)}
+                              {sortedGroupGames.map(renderGame)}
                             </div>
                           </div>
                         )
@@ -1676,11 +1755,15 @@ export default function LeagueDetailPage() {
             </CardHeader>
             <CardContent>
               {brackets.length === 0 ? (
-                <p className="text-center text-slate-500 py-8">
-                  {league.teams?.length < 2 
-                    ? 'Add at least 2 teams to create brackets.' 
-                    : 'No brackets created yet.'}
-                </p>
+                <div className="text-center py-12">
+                  <GitBranch className="mx-auto h-12 w-12 text-slate-300 mb-4" />
+                  <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300">No brackets yet</h3>
+                  <p className="text-slate-500 mt-1">
+                    {league.teams?.length < 2 
+                      ? 'Add at least 2 teams to create brackets.' 
+                      : 'Create a playoff bracket to get started.'}
+                  </p>
+                </div>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2">
                   {brackets.map((bracket) => (
@@ -2175,29 +2258,6 @@ export default function LeagueDetailPage() {
                 </div>
               )}
 
-              {/* End League */}
-              <div className="p-4 border border-red-200 dark:border-red-800 rounded-lg space-y-3 bg-red-50 dark:bg-red-900/20">
-                <h4 className="font-medium text-red-700 dark:text-red-400">End League</h4>
-                <p className="text-sm text-red-600 dark:text-red-400">Permanently lock this league. No more games or changes can be made.</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-red-600 border-red-300 hover:bg-red-100 dark:hover:bg-red-900/50"
-                  disabled={league.is_finished}
-                  onClick={async () => {
-                    if (confirm('Are you sure you want to end this league? This will lock all editing permanently.')) {
-                      try {
-                        await leagueApi.update(leagueId, { is_finished: true })
-                        loadData()
-                      } catch (error) {
-                        console.error('Failed to end league:', error)
-                      }
-                    }
-                  }}
-                >
-                  {league.is_finished ? '🔒 League Ended' : 'End League'}
-                </Button>
-              </div>
             </CardContent>
           </Card>
 
@@ -2479,6 +2539,34 @@ export default function LeagueDetailPage() {
               <CardDescription>Irreversible actions</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* End League */}
+              <div className="flex items-center justify-between p-4 border border-red-200 dark:border-red-800 rounded-lg">
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-white">End this league</p>
+                  <p className="text-sm text-slate-500">
+                    Permanently lock this league. No more games or changes can be made.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  className="text-red-600 border-red-300 hover:bg-red-100 dark:hover:bg-red-900/50"
+                  disabled={league.is_finished}
+                  onClick={async () => {
+                    if (confirm('Are you sure you want to end this league? This will lock all editing permanently.')) {
+                      try {
+                        await leagueApi.update(leagueId, { is_finished: true })
+                        loadData()
+                      } catch (error) {
+                        console.error('Failed to end league:', error)
+                      }
+                    }
+                  }}
+                >
+                  {league.is_finished ? '🔒 League Ended' : 'End League'}
+                </Button>
+              </div>
+
+              {/* Delete League */}
               <div className="flex items-center justify-between p-4 border border-red-200 dark:border-red-800 rounded-lg">
                 <div>
                   <p className="font-medium text-slate-900 dark:text-white">Delete this league</p>
@@ -2522,115 +2610,445 @@ export default function LeagueDetailPage() {
               <CardTitle>Penalties</CardTitle>
               <CardDescription>Manage the list of penalties available during games</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Add new penalty */}
-              <div className="flex gap-2">
-                <Input
-                  placeholder="New penalty name (e.g., Holding)"
-                  value={newPenalty}
-                  onChange={(e) => setNewPenalty(e.target.value)}
-                  disabled={league.is_finished}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && newPenalty.trim()) {
-                      e.preventDefault()
-                      const currentPenalties = league.penalties ? JSON.parse(league.penalties) : []
-                      if (!currentPenalties.includes(newPenalty.trim())) {
-                        const updated = [...currentPenalties, newPenalty.trim()]
-                        leagueApi.update(leagueId, { penalties: updated })
-                          .then(() => {
-                            setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) }))
-                            setNewPenalty('')
-                          })
-                          .catch(err => console.error('Failed to add penalty:', err))
-                      }
-                    }
-                  }}
-                />
-                <Button
-                  onClick={() => {
-                    if (!newPenalty.trim()) return
-                    const currentPenalties = league.penalties ? JSON.parse(league.penalties) : []
-                    if (!currentPenalties.includes(newPenalty.trim())) {
-                      const updated = [...currentPenalties, newPenalty.trim()]
-                      leagueApi.update(leagueId, { penalties: updated })
-                        .then(() => {
-                          setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) }))
-                          setNewPenalty('')
-                        })
-                        .catch(err => console.error('Failed to add penalty:', err))
-                    }
-                  }}
-                  disabled={league.is_finished || !newPenalty.trim()}
-                >
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add
-                </Button>
-              </div>
-
-              {/* Penalty list */}
-              <div className="space-y-2">
+            <CardContent>
+              <Button onClick={() => setPenaltiesDialogOpen(true)} disabled={league.is_finished}>
+                Manage Penalties
+              </Button>
+              <p className="text-sm text-slate-500 mt-2">
                 {(() => {
-                  const penalties = league.penalties ? JSON.parse(league.penalties) : []
-                  if (penalties.length === 0) {
-                    return (
-                      <p className="text-sm text-slate-500 py-4 text-center">
-                        No penalties configured. Add some common penalties like "Holding", "False Start", "Offsides".
-                      </p>
-                    )
-                  }
-                  return penalties.map((penalty, index) => (
-                    <div key={index} className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded">
-                      <span>{penalty}</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-red-500 hover:text-red-700 h-8 w-8 p-0"
-                        disabled={league.is_finished}
-                        onClick={() => {
-                          const updated = penalties.filter((_, i) => i !== index)
-                          leagueApi.update(leagueId, { penalties: updated })
-                            .then(() => setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) })))
-                            .catch(err => console.error('Failed to remove penalty:', err))
-                        }}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ))
+                  const penalties = league.penalties ? (typeof league.penalties === 'string' ? JSON.parse(league.penalties) : league.penalties) : []
+                  return `${penalties.length} penalties configured`
                 })()}
-              </div>
-
-              {/* Quick add common penalties */}
-              <div className="pt-4 border-t">
-                <p className="text-sm text-slate-500 mb-2">Quick add common penalties:</p>
-                <div className="flex flex-wrap gap-2">
-                  {['Holding', 'False Start', 'Offsides', 'Pass Interference', 'Illegal Formation', 'Delay of Game', 'Encroachment', 'Illegal Motion', 'Unsportsmanlike Conduct', 'Roughing the Passer'].map(penalty => {
-                    const currentPenalties = league.penalties ? JSON.parse(league.penalties) : []
-                    const alreadyAdded = currentPenalties.includes(penalty)
-                    return (
-                      <Button
-                        key={penalty}
-                        variant="outline"
-                        size="sm"
-                        disabled={league.is_finished || alreadyAdded}
-                        className={alreadyAdded ? 'opacity-50' : ''}
-                        onClick={() => {
-                          if (!alreadyAdded) {
-                            const updated = [...currentPenalties, penalty]
-                            leagueApi.update(leagueId, { penalties: updated })
-                              .then(() => setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) })))
-                              .catch(err => console.error('Failed to add penalty:', err))
-                          }
-                        }}
-                      >
-                        {alreadyAdded ? '✓ ' : '+ '}{penalty}
-                      </Button>
-                    )
-                  })}
-                </div>
-              </div>
+              </p>
             </CardContent>
           </Card>
+
+          {/* Manage Penalties Dialog */}
+          <Dialog open={penaltiesDialogOpen} onOpenChange={setPenaltiesDialogOpen}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Penalties</DialogTitle>
+                <DialogDescription>View, add, or remove penalties for this league</DialogDescription>
+              </DialogHeader>
+              {/* Penalty list - scrollable, 7 visible at a time */}
+              <div className="max-h-[420px] overflow-y-auto space-y-2 pr-2">
+                {(() => {
+                  const penalties = league.penalties ? (typeof league.penalties === 'string' ? JSON.parse(league.penalties) : league.penalties) : []
+                  
+                  // Use configured penalties, or show presets if none configured
+                  const displayPenalties = penalties.length > 0 ? penalties : DEFAULT_PENALTIES
+                  const isUsingPresets = penalties.length === 0
+                  
+                  return displayPenalties.map((penalty, index) => {
+                    // Support both old string format and new object format
+                    const isObject = typeof penalty === 'object'
+                    const name = isObject ? penalty.name : penalty
+                    const isCustom = isObject && penalty.custom
+                    const yards = isObject ? penalty.yards : null
+                    const lossOfDown = isObject ? penalty.lossOfDown : false
+                    const side = isObject ? penalty.side : 'either'
+                    const subPenalties = isObject ? (penalty.subPenalties || []) : []
+                    
+                    return (
+                      <div key={index} className="bg-slate-50 dark:bg-slate-800 rounded overflow-hidden">
+                        <div className="flex items-center justify-between p-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{name}</span>
+                              {isCustom && (
+                                <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1.5 py-0.5 rounded">
+                                  Custom
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-500 flex gap-2 mt-0.5">
+                              {yards && <span>{yards} yards</span>}
+                              {lossOfDown && <span>+ Loss of Down</span>}
+                              {side !== 'either' && <span>({side} only)</span>}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-slate-500 hover:text-slate-700 h-8 w-8 p-0"
+                              title="Edit penalty"
+                              onClick={() => {
+                                setEditPenaltyForm({
+                                  index,
+                                  name,
+                                  yards: yards || 5,
+                                  lossOfDown,
+                                  side,
+                                  parentIndex: null, // null means it's a top-level penalty
+                                  subPenalties: subPenalties,
+                                })
+                                setEditPenaltyDialogOpen(true)
+                              }}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-slate-500 hover:text-slate-700 h-8 w-8 p-0"
+                              title="Add sub-penalty"
+                              onClick={() => {
+                                setSubPenaltyForm({ parentIndex: index, name: '' })
+                                setAddSubPenaltyDialogOpen(true)
+                              }}
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-500 hover:text-red-700 h-8 w-8 p-0"
+                              onClick={() => {
+                                if (isUsingPresets) {
+                                  const updated = DEFAULT_PENALTIES.filter((_, i) => i !== index)
+                                  leagueApi.update(leagueId, { penalties: updated })
+                                    .then(() => setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) })))
+                                    .catch(err => console.error('Failed to remove penalty:', err))
+                                } else {
+                                  const updated = penalties.filter((_, i) => i !== index)
+                                  leagueApi.update(leagueId, { penalties: updated })
+                                    .then(() => setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) })))
+                                    .catch(err => console.error('Failed to remove penalty:', err))
+                                }
+                              }}
+                            >
+                              <Minus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        {/* Sub-penalties */}
+                        {subPenalties.length > 0 && (
+                          <div className="border-t border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900">
+                            {subPenalties.map((sub, subIndex) => (
+                              <div key={subIndex} className="flex items-center justify-between px-3 py-1.5 pl-6 text-sm">
+                                <span className="text-slate-600 dark:text-slate-400">— {sub}</span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-red-500 hover:text-red-700 h-6 w-6 p-0"
+                                  onClick={() => {
+                                    const currentPenalties = isUsingPresets ? [...DEFAULT_PENALTIES] : [...penalties]
+                                    const updatedPenalty = { ...currentPenalties[index] }
+                                    updatedPenalty.subPenalties = updatedPenalty.subPenalties.filter((_, i) => i !== subIndex)
+                                    currentPenalties[index] = updatedPenalty
+                                    leagueApi.update(leagueId, { penalties: currentPenalties })
+                                      .then(() => setLeague(prev => ({ ...prev, penalties: JSON.stringify(currentPenalties) })))
+                                      .catch(err => console.error('Failed to remove sub-penalty:', err))
+                                  }}
+                                >
+                                  <X className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
+              <DialogFooter className="flex-col sm:flex-row gap-2">
+                <Button variant="outline" onClick={() => setPenaltiesDialogOpen(false)}>
+                  Close
+                </Button>
+                <Button onClick={() => {
+                  setPenaltyForm({ name: '', yards: 5, lossOfDown: false, scope: 'league', side: 'either' })
+                  setAddPenaltyDialogOpen(true)
+                }}>
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Custom Penalty
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Add Penalty Dialog */}
+          <Dialog open={addPenaltyDialogOpen} onOpenChange={setAddPenaltyDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add Custom Penalty</DialogTitle>
+                <DialogDescription>Create a new penalty for use during games</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label>Penalty Name</Label>
+                  <Input
+                    placeholder="e.g., Illegal Block"
+                    value={penaltyForm.name}
+                    onChange={(e) => setPenaltyForm({ ...penaltyForm, name: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Yards</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="99"
+                    value={penaltyForm.yards}
+                    onChange={(e) => setPenaltyForm({ ...penaltyForm, yards: parseInt(e.target.value) || 0 })}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="loss-of-down"
+                    checked={penaltyForm.lossOfDown}
+                    onChange={(e) => setPenaltyForm({ ...penaltyForm, lossOfDown: e.target.checked })}
+                    className="h-4 w-4 rounded"
+                  />
+                  <Label htmlFor="loss-of-down" className="cursor-pointer">Loss of Down</Label>
+                </div>
+                <div className="space-y-2">
+                  <Label>Applies To</Label>
+                  <Select
+                    value={penaltyForm.side}
+                    onValueChange={(value) => setPenaltyForm({ ...penaltyForm, side: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="either">Either Team</SelectItem>
+                      <SelectItem value="offense">Offense Only</SelectItem>
+                      <SelectItem value="defense">Defense Only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Scope</Label>
+                  <Select
+                    value={penaltyForm.scope}
+                    onValueChange={(value) => setPenaltyForm({ ...penaltyForm, scope: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="league">This League Only</SelectItem>
+                      <SelectItem value="account">All My Leagues</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-slate-500">
+                    {penaltyForm.scope === 'account' 
+                      ? 'This penalty will be available in all your leagues' 
+                      : 'This penalty will only be available in this league'}
+                  </p>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAddPenaltyDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button 
+                  disabled={!penaltyForm.name.trim()}
+                  onClick={() => {
+                    const currentPenalties = league.penalties ? (typeof league.penalties === 'string' ? JSON.parse(league.penalties) : league.penalties) : []
+                    const newPenalty = {
+                      name: penaltyForm.name.trim(),
+                      yards: penaltyForm.yards,
+                      lossOfDown: penaltyForm.lossOfDown,
+                      side: penaltyForm.side,
+                      custom: true,
+                      scope: penaltyForm.scope,
+                    }
+                    const updated = [...currentPenalties, newPenalty]
+                    leagueApi.update(leagueId, { penalties: updated })
+                      .then(() => {
+                        setLeague(prev => ({ ...prev, penalties: JSON.stringify(updated) }))
+                        setAddPenaltyDialogOpen(false)
+                      })
+                      .catch(err => console.error('Failed to add penalty:', err))
+                  }}
+                >
+                  Add Penalty
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Add Sub-Penalty Dialog */}
+          <Dialog open={addSubPenaltyDialogOpen} onOpenChange={setAddSubPenaltyDialogOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Add Sub-Penalty</DialogTitle>
+                <DialogDescription>
+                  {subPenaltyForm.parentIndex !== null && (() => {
+                    const penalties = league.penalties ? (typeof league.penalties === 'string' ? JSON.parse(league.penalties) : league.penalties) : []
+                    const displayPenalties = penalties.length > 0 ? penalties : DEFAULT_PENALTIES
+                    const parent = displayPenalties[subPenaltyForm.parentIndex]
+                    return `Add a sub-type for "${parent?.name || 'Penalty'}"`
+                  })()}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="py-4">
+                <Label>Sub-Penalty Name</Label>
+                <Input
+                  placeholder="e.g., Taunting"
+                  value={subPenaltyForm.name}
+                  onChange={(e) => setSubPenaltyForm({ ...subPenaltyForm, name: e.target.value })}
+                  className="mt-2"
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAddSubPenaltyDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  disabled={!subPenaltyForm.name.trim()}
+                  onClick={() => {
+                    const penalties = league.penalties ? (typeof league.penalties === 'string' ? JSON.parse(league.penalties) : league.penalties) : []
+                    const currentPenalties = penalties.length > 0 ? [...penalties] : [...DEFAULT_PENALTIES]
+                    const parentPenalty = { ...currentPenalties[subPenaltyForm.parentIndex] }
+                    parentPenalty.subPenalties = [...(parentPenalty.subPenalties || []), subPenaltyForm.name.trim()]
+                    currentPenalties[subPenaltyForm.parentIndex] = parentPenalty
+                    leagueApi.update(leagueId, { penalties: currentPenalties })
+                      .then(() => {
+                        setLeague(prev => ({ ...prev, penalties: JSON.stringify(currentPenalties) }))
+                        setAddSubPenaltyDialogOpen(false)
+                      })
+                      .catch(err => console.error('Failed to add sub-penalty:', err))
+                  }}
+                >
+                  Add Sub-Penalty
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Edit Penalty Dialog */}
+          <Dialog open={editPenaltyDialogOpen} onOpenChange={setEditPenaltyDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Edit Penalty</DialogTitle>
+                <DialogDescription>Configure this penalty's settings</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label>Penalty Name</Label>
+                  <Input
+                    value={editPenaltyForm.name}
+                    onChange={(e) => setEditPenaltyForm({ ...editPenaltyForm, name: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Yards</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="99"
+                    value={editPenaltyForm.yards}
+                    onChange={(e) => setEditPenaltyForm({ ...editPenaltyForm, yards: parseInt(e.target.value) || 0 })}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="edit-loss-of-down"
+                    checked={editPenaltyForm.lossOfDown}
+                    onChange={(e) => setEditPenaltyForm({ ...editPenaltyForm, lossOfDown: e.target.checked })}
+                    className="h-4 w-4 rounded"
+                  />
+                  <Label htmlFor="edit-loss-of-down" className="cursor-pointer">Loss of Down</Label>
+                </div>
+                <div className="space-y-2">
+                  <Label>Applies To</Label>
+                  <Select
+                    value={editPenaltyForm.side}
+                    onValueChange={(value) => setEditPenaltyForm({ ...editPenaltyForm, side: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="either">Either Team</SelectItem>
+                      <SelectItem value="offense">Offense Only</SelectItem>
+                      <SelectItem value="defense">Defense Only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Make Sub-Penalty Of</Label>
+                  <Select
+                    value={editPenaltyForm.parentIndex === null ? 'none' : String(editPenaltyForm.parentIndex)}
+                    onValueChange={(value) => setEditPenaltyForm({ ...editPenaltyForm, parentIndex: value === 'none' ? null : parseInt(value) })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">— Top-Level Penalty —</SelectItem>
+                      {(() => {
+                        const penalties = league.penalties ? (typeof league.penalties === 'string' ? JSON.parse(league.penalties) : league.penalties) : []
+                        const displayPenalties = penalties.length > 0 ? penalties : DEFAULT_PENALTIES
+                        return displayPenalties.map((p, i) => {
+                          if (i === editPenaltyForm.index) return null // Can't be parent of itself
+                          const pName = typeof p === 'object' ? p.name : p
+                          return <SelectItem key={i} value={String(i)}>{pName}</SelectItem>
+                        })
+                      })()}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-slate-500">
+                    Select a parent to make this a sub-penalty (e.g., Taunting under Unsportsmanlike Conduct)
+                  </p>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditPenaltyDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  disabled={!editPenaltyForm.name.trim()}
+                  onClick={() => {
+                    const penalties = league.penalties ? (typeof league.penalties === 'string' ? JSON.parse(league.penalties) : league.penalties) : []
+                    let currentPenalties = penalties.length > 0 ? [...penalties] : [...DEFAULT_PENALTIES]
+                    
+                    // If changing to a sub-penalty
+                    if (editPenaltyForm.parentIndex !== null) {
+                      // Remove from top level
+                      const removedPenalty = currentPenalties[editPenaltyForm.index]
+                      currentPenalties = currentPenalties.filter((_, i) => i !== editPenaltyForm.index)
+                      
+                      // Adjust parent index if it was after the removed item
+                      let adjustedParentIndex = editPenaltyForm.parentIndex
+                      if (editPenaltyForm.parentIndex > editPenaltyForm.index) {
+                        adjustedParentIndex--
+                      }
+                      
+                      // Add to parent's subPenalties
+                      const parent = { ...currentPenalties[adjustedParentIndex] }
+                      parent.subPenalties = [...(parent.subPenalties || []), editPenaltyForm.name.trim()]
+                      currentPenalties[adjustedParentIndex] = parent
+                    } else {
+                      // Update in place
+                      currentPenalties[editPenaltyForm.index] = {
+                        ...currentPenalties[editPenaltyForm.index],
+                        name: editPenaltyForm.name.trim(),
+                        yards: editPenaltyForm.yards,
+                        lossOfDown: editPenaltyForm.lossOfDown,
+                        side: editPenaltyForm.side,
+                      }
+                    }
+                    
+                    leagueApi.update(leagueId, { penalties: currentPenalties })
+                      .then(() => {
+                        setLeague(prev => ({ ...prev, penalties: JSON.stringify(currentPenalties) }))
+                        setEditPenaltyDialogOpen(false)
+                      })
+                      .catch(err => console.error('Failed to update penalty:', err))
+                  }}
+                >
+                  Save Changes
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {/* Game Mechanics Card */}
           <Card className="mb-6">

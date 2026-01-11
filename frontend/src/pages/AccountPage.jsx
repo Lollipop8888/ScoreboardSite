@@ -96,8 +96,9 @@ export default function AccountPage() {
 
   if (!user) {
     return (
-      <div className="text-center py-12">
-        <p className="text-slate-600">Please log in to view account settings.</p>
+      <div className="max-w-2xl mx-auto text-center py-12">
+        <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Account Settings</h1>
+        <p className="text-slate-600 dark:text-slate-400">Please sign in to manage your account.</p>
       </div>
     )
   }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Trophy, LayoutGrid, Home, Target, Moon, Sun, LogIn, LogOut, User, Share2, Copy, Check } from 'lucide-react'
+import { Trophy, LayoutGrid, Home, Target, Moon, Sun, LogIn, LogOut, User, Share2, Copy, Check, Settings, Keyboard } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/theme'
 import { useAuth } from '@/lib/auth'
@@ -17,6 +17,7 @@ const navItems = [
   { path: '/', label: 'Home', icon: Home },
   { path: '/leagues', label: 'Leagues', icon: Trophy },
   { path: '/scoreboards', label: 'Scoreboards', icon: LayoutGrid },
+  { path: '/keybinds', label: 'Keybinds', icon: Keyboard },
 ]
 
 export default function Layout() {
@@ -36,14 +37,16 @@ export default function Layout() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-green-50/30 dark:from-slate-950 dark:to-slate-900 overflow-x-hidden">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-green-50/30 dark:from-slate-950 dark:to-slate-900 overflow-x-hidden">
       <header className="sticky top-0 z-50 border-b border-green-100 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm">
         <div className="container mx-auto px-2 sm:px-4">
           <div className="flex h-14 sm:h-16 items-center justify-between gap-1">
             <Link to="/" className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              <div className="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-gradient-to-br from-amber-600 to-amber-800 text-white shadow-md">
-                <Target className="h-4 w-4 sm:h-5 sm:w-5" />
-              </div>
+              <img 
+                src="/logo.png" 
+                alt="GridIron" 
+                className="h-10 sm:h-12 w-auto object-contain"
+              />
               <div className="flex flex-col">
                 <span className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white leading-tight">GridIron</span>
                 <span className="text-[9px] sm:text-[10px] text-green-700 dark:text-green-400 font-semibold uppercase tracking-wider leading-tight hidden xs:block">Score Tracker</span>
@@ -144,11 +147,11 @@ export default function Layout() {
         </div>
       </header>
 
-      <main className="container mx-auto px-2 sm:px-4 py-4 sm:py-8 overflow-x-hidden">
+      <main className="flex-1 container mx-auto px-2 sm:px-4 py-4 sm:py-8 overflow-x-hidden">
         <Outlet />
       </main>
 
-      <footer className="border-t border-green-100 dark:border-slate-800 bg-white dark:bg-slate-900 py-4 sm:py-6">
+      <footer className="border-t border-green-100 dark:border-slate-800 bg-white dark:bg-slate-900 py-4 sm:py-6 mt-auto">
         <div className="container mx-auto px-2 sm:px-4 text-center text-xs sm:text-sm text-slate-500 dark:text-slate-400">
           <p className="flex items-center justify-center gap-2">
             <Target className="h-4 w-4 text-amber-700 dark:text-amber-500" />

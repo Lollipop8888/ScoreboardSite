@@ -13,6 +13,7 @@ import OBSDisplayPage from './pages/OBSDisplayPage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import AccountPage from './pages/AccountPage'
+import KeybindsPage from './pages/KeybindsPage'
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
         <Route path="brackets/:bracketId" element={<BracketPage />} />
         <Route path="share/:type/:code" element={<SharePage />} />
         <Route path="account" element={<AccountPage />} />
+        <Route path="keybinds" element={<KeybindsPage />} />
       </Route>
     </Routes>
   )

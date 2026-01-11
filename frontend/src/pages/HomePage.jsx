@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { gameApi, bracketApi, scoreboardApi, leagueApi, inviteApi, standaloneGameApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { HelpButton, FirstTimeTutorial } from '@/components/HelpTips'
+import { useLanguage } from '@/lib/i18n'
 
 const features = [
   {
@@ -50,6 +52,7 @@ const howItWorks = [
 export default function HomePage() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { t } = useLanguage()
   const [shareCode, setShareCode] = useState('')
   const [joinError, setJoinError] = useState('')
   const [isJoining, setIsJoining] = useState(false)
@@ -202,6 +205,14 @@ export default function HomePage() {
 
   return (
     <div className="space-y-16">
+      {/* First-time tutorial */}
+      <FirstTimeTutorial context="home" />
+      
+      {/* Floating help button */}
+      <div className="fixed bottom-6 right-6 z-50">
+        <HelpButton context="home" className="shadow-lg" />
+      </div>
+
       {/* Pending Invites Banner */}
       {pendingInvites.length > 0 && (
         <div className="fixed top-16 left-0 right-0 z-40 bg-gradient-to-r from-blue-600 to-indigo-600 shadow-lg">
@@ -210,7 +221,7 @@ export default function HomePage() {
               <div className="flex items-center gap-3 text-white">
                 <Mail className="h-5 w-5" />
                 <span className="font-medium">
-                  You have {pendingInvites.length} pending invite{pendingInvites.length > 1 ? 's' : ''}
+                  {pendingInvites.length} {pendingInvites.length > 1 ? t('pending_invites_plural') : t('pending_invites')}
                 </span>
               </div>
               <Button
@@ -218,7 +229,7 @@ export default function HomePage() {
                 variant="secondary"
                 onClick={() => document.getElementById('invites-section')?.scrollIntoView({ behavior: 'smooth' })}
               >
-                View Invites
+                {t('view_invites')}
               </Button>
             </div>
           </div>
@@ -309,46 +320,47 @@ export default function HomePage() {
         
         <div className="mx-auto max-w-3xl space-y-6 relative">
           <div className="flex justify-center mb-4">
-            <div className="bg-gradient-to-br from-amber-700 to-amber-900 p-4 rounded-full shadow-lg">
-              <Target className="h-12 w-12 text-white" />
-            </div>
+            <img 
+              src="/logo.png" 
+              alt="GridIron" 
+              className="h-24 sm:h-32 w-auto object-contain drop-shadow-lg"
+            />
           </div>
           <h1 className="text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
-            Your{' '}
+            {t('hero_title_1')}{' '}
             <span className="bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
-              Football
+              {t('hero_title_2')}
             </span>{' '}
-            Scoreboard
+            {t('hero_title_3')}
           </h1>
           <p className="text-xl text-slate-600 dark:text-slate-300">
-            The ultimate scorekeeping platform for football leagues, games, and tournaments.
-            Real-time updates, easy sharing, and professional-grade tracking.
+            {t('hero_subtitle')}
           </p>
           
           <div className="flex flex-wrap justify-center gap-4 pt-6">
-            <Button asChild size="lg" className="gap-2 bg-green-600 hover:bg-green-700">
+            <Button asChild size="lg" className="gap-2 bg-green-600 hover:bg-green-700" data-tutorial="start-league">
               <Link to="/leagues">
                 <Trophy className="h-5 w-5" />
-                Start a League
+                {t('start_league')}
               </Link>
             </Button>
-            <Button asChild size="lg" variant="outline" className="gap-2 border-green-600 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950">
+            <Button asChild size="lg" variant="outline" className="gap-2 border-green-600 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950" data-tutorial="quick-scoreboard">
               <Link to="/scoreboards">
                 <LayoutGrid className="h-5 w-5" />
-                Quick Scoreboard
+                {t('quick_scoreboard')}
               </Link>
             </Button>
           </div>
 
           {/* Join Display Section */}
           <div className="mt-8 pt-8 border-t border-slate-200 dark:border-slate-700">
-            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Have a display code?</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">{t('have_code')}</p>
             <form onSubmit={handleJoinDisplay} className="flex items-center justify-center gap-2 max-w-sm mx-auto">
-              <div className="relative flex-1">
+              <div className="relative flex-1" data-tutorial="share-code-input">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                 <Input
                   type="text"
-                  placeholder="Enter share code..."
+                  placeholder={t('enter_code')}
                   value={shareCode}
                   onChange={(e) => {
                     setShareCode(e.target.value.toUpperCase())
@@ -359,7 +371,7 @@ export default function HomePage() {
                 />
               </div>
               <Button type="submit" disabled={!shareCode.trim() || isJoining} className="gap-1">
-                {isJoining ? 'Joining...' : 'Join'}
+                {isJoining ? t('joining') : t('join')}
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </form>

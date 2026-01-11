@@ -234,8 +234,12 @@ export function createWebSocket(type, shareCode, onMessage) {
   const ws = new WebSocket(wsUrl);
   
   ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    onMessage(data);
+    try {
+      const data = JSON.parse(event.data);
+      onMessage(data);
+    } catch (e) {
+      console.error('WebSocket message parse error:', e, event.data);
+    }
   };
   
   ws.onerror = (error) => {

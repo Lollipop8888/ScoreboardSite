@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Minus, Play, Square, Share2, Copy, Check, Trophy, RotateCcw, Flag, Pause, Volume2, Bell, Search, X, Eye, EyeOff, Video, Upload, Trash2, Zap, Send, Settings } from 'lucide-react'
+import { Plus, Minus, Play, Square, Share2, Copy, Check, Trophy, RotateCcw, Flag, Pause, Volume2, Bell, Search, X, Eye, EyeOff, Video, Upload, Trash2, Zap, Send, Settings, Keyboard } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -23,6 +23,8 @@ import {
 import { gameApi, standaloneGameApi, teamApi, bracketApi, createWebSocket, inviteApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { GameScoreboardDisplay } from '@/components/GameScoreboardDisplay'
+import { HelpButton, FirstTimeTutorial } from '@/components/HelpTips'
+import { getKeybinds, getKeybindsEnabled, setKeybindsEnabled as saveKeybindsEnabled } from '@/pages/KeybindsPage'
 
 const QUARTERS = ['Pregame', 'Q1', 'Q2', 'Halftime', 'Q3', 'Q4', 'OT', 'Final']
 
@@ -98,12 +100,15 @@ export default function LiveGamePage({ standalone = false }) {
   const [timerRunning, setTimerRunning] = useState(false)
   const timerRunningRef = useRef(false) // Ref to track if timer is running (for sync)
   const gameRef = useRef(null) // Ref to track current game state for timer
+  const gameTimeRef = useRef(null) // Ref to track current game time (source of truth for controller)
+  const ignoreWsTimeUntilRef = useRef(0) // Timestamp until which to ignore WebSocket game_time updates
   
   // Play clock state
   const [playClock, setPlayClock] = useState(40)
   const [playClockRunning, setPlayClockRunning] = useState(false)
   const [showPlayClock, setShowPlayClock] = useState(true)
   const playClockRunningRef = useRef(false)
+  const playClockRef = useRef(40) // Ref to track current play clock (source of truth for controller)
   const timeoutClockRunningRef = useRef(false)
   const simpleTimerRunningRef = useRef(false)
   
@@ -239,10 +244,14 @@ export default function LiveGamePage({ standalone = false }) {
   // Red zone display state
   const [showRedZone, setShowRedZone] = useState(false)
   
+  // Injury display state
+  const [showInjury, setShowInjury] = useState(false)
+  
   // FG Attempt display state
   const [showFGAttempt, setShowFGAttempt] = useState(false)
   const [fgDistance, setFgDistance] = useState(30)
   const [fgResult, setFgResult] = useState(null) // null, 'good', 'no-good', 'blocked'
+  const [showFGDistanceDialog, setShowFGDistanceDialog] = useState(false) // For keybind FG setup
   
   // PAT/2PT Attempt display state
   const [showPATAttempt, setShowPATAttempt] = useState(null) // null, 'pat', '2pt'
@@ -271,6 +280,31 @@ export default function LiveGamePage({ standalone = false }) {
   
   // Share dialog state
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
+  
+  // Keybinds enabled state (synced with localStorage, default: disabled)
+  const [keybindsEnabled, setKeybindsEnabled] = useState(() => getKeybindsEnabled())
+  
+  // Quick stats panel state
+  const [showQuickStats, setShowQuickStats] = useState(false)
+  const [quickStats, setQuickStats] = useState({
+    home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 },
+    away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 },
+    // Custom stats - array of { id, label, shortLabel, home, away, color }
+    custom: []
+  })
+  const [showCustomStatDialog, setShowCustomStatDialog] = useState(false)
+  const [editingCustomStat, setEditingCustomStat] = useState(null) // null for new, or stat object for edit
+  const [customStatForm, setCustomStatForm] = useState({ label: '', shortLabel: '', color: '#3b82f6' })
+  // Display stats on scoreboard - which stats to show
+  const [displayStats, setDisplayStats] = useState({
+    show: false,
+    quarterScores: false,
+    turnovers: false,
+    firstDowns: false,
+    penalties: false,
+    all: false,
+    customStats: [] // array of custom stat IDs to display
+  })
   
   // Throttle ref for game time sync (to avoid flooding API)
   const lastTimeSyncRef = useRef(0)
@@ -311,6 +345,38 @@ export default function LiveGamePage({ standalone = false }) {
       }
       
       setGame(data)
+      
+      // Restore state from display_state
+      if (data.display_state) {
+        try {
+          const savedState = JSON.parse(data.display_state)
+          // Restore quick stats
+          if (savedState.quickStats) setQuickStats(savedState.quickStats)
+          // Restore display stats
+          if (savedState.displayStats) setDisplayStats(savedState.displayStats)
+          // Restore game status
+          if (savedState.gameStatus) setGameStatus(savedState.gameStatus)
+          // Restore visibility settings
+          if (savedState.hideDownDistance !== undefined) setHideDownDistance(savedState.hideDownDistance)
+          if (savedState.hideTimeouts !== undefined) setHideTimeouts(savedState.hideTimeouts)
+          if (savedState.showPlayClock !== undefined) setShowPlayClock(savedState.showPlayClock)
+          if (savedState.showLiveIndicator !== undefined) setShowLiveIndicator(savedState.showLiveIndicator)
+          if (savedState.showRecords !== undefined) setShowRecords(savedState.showRecords)
+          if (savedState.teamRecords) setTeamRecords(savedState.teamRecords)
+        } catch (e) {
+          console.error('Failed to parse display_state:', e)
+        }
+      }
+      
+      // Restore down, distance, possession, timeouts from game data
+      if (data.down !== undefined) setDown(data.down)
+      if (data.distance !== undefined) setDistance(data.distance)
+      if (data.ball_on !== undefined) setBallOn(data.ball_on)
+      if (data.possession !== undefined) setPossession(data.possession)
+      if (data.home_timeouts !== undefined) setHomeTimeouts(data.home_timeouts)
+      if (data.away_timeouts !== undefined) setAwayTimeouts(data.away_timeouts)
+      if (data.play_clock !== undefined) setPlayClock(data.play_clock)
+      
       // Sync simple timer state from game data
       if (data.timer_seconds !== undefined) {
         setSimpleTimerSeconds(data.timer_seconds)
@@ -343,6 +409,10 @@ export default function LiveGamePage({ standalone = false }) {
   // Keep gameRef in sync with game state for timer access
   useEffect(() => {
     gameRef.current = game
+    // Also track game time separately as source of truth
+    if (game?.game_time) {
+      gameTimeRef.current = game.game_time
+    }
   }, [game])
 
   // Resume timer if it was running when page loaded
@@ -424,15 +494,16 @@ export default function LiveGamePage({ standalone = false }) {
     if (!game?.share_code) return
 
     const ws = createWebSocket('game', game.share_code, (message) => {
-      // Controller receives updates but ignores game_time/quarter when timer is running
+      // Controller is the source of truth for game_time and play_clock - ALWAYS ignore from WebSocket
+      // This prevents the clocks from jumping around due to stale updates
       if (message.type === 'game_update') {
         setGame((prev) => {
-          // Don't update game_time or quarter from WebSocket if timer is running locally
-          if (timerRunningRef.current) {
-            const { game_time, quarter, ...rest } = message.data
-            return { ...prev, ...rest }
-          }
-          return { ...prev, ...message.data }
+          // Always ignore game_time and play_clock from WebSocket on the controller
+          // The controller manages these locally and syncs to backend
+          const { game_time, timer_running, timer_started_at, timer_started_seconds, play_clock, ...rest } = message.data
+          // Preserve the current game time from our ref (source of truth)
+          const preservedTime = gameTimeRef.current || prev?.game_time
+          return { ...prev, ...rest, game_time: preservedTime }
         })
       }
     })
@@ -484,6 +555,269 @@ export default function LiveGamePage({ standalone = false }) {
       setGoingForIt(false)
     }
   }, [down])
+
+  // Keybind handler
+  useEffect(() => {
+    if (!game) return
+    
+    const keybinds = getKeybinds()
+    
+    const handleKeyDown = (e) => {
+      // Don't trigger if keybinds are disabled
+      if (!keybindsEnabled) return
+      
+      // Don't trigger if typing in an input, textarea, or select
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+        return
+      }
+      
+      // Don't trigger if a dialog is open
+      if (document.querySelector('[role="dialog"]')) {
+        return
+      }
+      
+      const key = e.key.toLowerCase()
+      
+      // Find matching keybind action
+      const action = Object.entries(keybinds).find(([_, bind]) => bind.key === key)?.[0]
+      if (!action) return
+      
+      e.preventDefault()
+      
+      // Execute action based on keybind
+      switch (action) {
+        // Scoring - show TD panel for team with possession, or home if none
+        case 'touchdown':
+          stopTimer()
+          setShowTDPanel(possession || 'home')
+          break
+        case 'safety':
+          // Safety scores for the OTHER team (defense) - use scoreSafety for proper celebration/kickoff
+          stopTimer()
+          scoreSafety(possession === 'home' ? 'away' : 'home')
+          break
+        case 'attemptPat':
+          stopTimer()
+          setShowPATAttempt('pat')
+          break
+        case 'attemptFg':
+          // FG dialog will stop timer when attempt is shown
+          setShowFGDistanceDialog(true)
+          break
+        case 'attempt2pt':
+          stopTimer()
+          setShowPATAttempt('2pt')
+          break
+        case 'attemptGood':
+          // Universal good - works for PAT, FG, 2PT
+          if (showPATAttempt === 'pat') {
+            updateScore(possession || 'home', 1)
+            setBigPlay('pat-good')
+            setShowPATAttempt(null)
+          } else if (showPATAttempt === '2pt') {
+            updateScore(possession || 'home', 2)
+            setBigPlay('2pt-good')
+            setShowPATAttempt(null)
+          } else if (showFGAttempt) {
+            updateScore(possession || 'home', 3)
+            setBigPlay('fg-good')
+            setShowFGAttempt(false)
+          }
+          break
+        case 'attemptNoGood':
+          // Universal no good - works for PAT, FG, 2PT
+          if (showPATAttempt === 'pat') {
+            setBigPlay('pat-no-good')
+            setShowPATAttempt(null)
+          } else if (showPATAttempt === '2pt') {
+            setBigPlay('2pt-no-good')
+            setShowPATAttempt(null)
+          } else if (showFGAttempt) {
+            setBigPlay('fg-no-good')
+            setShowFGAttempt(false)
+          }
+          break
+          
+        // Clock
+        case 'toggleClock':
+          if (timerRunning) {
+            stopTimer()
+          } else {
+            startTimer()
+          }
+          break
+        case 'togglePlayClock':
+          if (playClockRunning) {
+            stopPlayClock()
+          } else {
+            startPlayClock(playClock)
+          }
+          break
+        case 'togglePlayClockVisible':
+          setShowPlayClock(prev => !prev)
+          break
+        case 'playClock40':
+          setPlayClock(40)
+          break
+        case 'playClock25':
+          setPlayClock(25)
+          break
+        case 'nextQuarter':
+          nextQuarter()
+          break
+        case 'prevQuarter':
+          prevQuarter()
+          break
+          
+        // Down & Distance
+        case 'nextDown':
+          // Same as the "⏱️ Down" quick action button
+          if (!playClockRunning) {
+            setPlayClock(40)
+            startPlayClock(40)
+          }
+          setShowDownOnly(true)
+          nextDown()
+          break
+        case 'firstDown':
+          // Show first down overlay and reset downs
+          stopTimer()
+          setShowFirstDown(true)
+          setTimeout(() => setShowFirstDown(false), 3000)
+          setDown(1)
+          setDistance(10)
+          setShowDownOnly(false)
+          resetPlayClock(40)
+          startPlayClock(40)
+          break
+        case 'yardsPlus5':
+          setDistance(prev => Math.min(99, prev + 5))
+          break
+        case 'yardsMinus5':
+          setDistance(prev => Math.max(1, prev - 5))
+          break
+        case 'toggleDDVisible':
+          setHideDownDistance(prev => !prev)
+          break
+        case 'toggleDownOnly':
+          setShowDownOnly(prev => !prev)
+          break
+          
+        // Play Results
+        case 'incomplete':
+          stopTimer()
+          setShowIncomplete(true)
+          setTimeout(() => setShowIncomplete(false), 2000)
+          setDown(prev => prev < 4 ? prev + 1 : 1)
+          resetPlayClock(40)
+          startPlayClock(40)
+          break
+        case 'outOfBounds':
+          stopTimer()
+          setShowOutOfBounds(true)
+          setTimeout(() => setShowOutOfBounds(false), 2000)
+          break
+        case 'redZone':
+          setShowRedZone(true)
+          setTimeout(() => setShowRedZone(false), 5000)
+          break
+        case 'turnover':
+          stopTimer()
+          setShowTurnover(possession === 'home' ? 'away' : 'home')
+          setTimeout(() => setShowTurnover(null), 3000)
+          setPossession(prev => prev === 'home' ? 'away' : 'home')
+          setDown(1)
+          setDistance(10)
+          break
+        case 'fumble':
+          // Same as D&D turnover quick action - shows turnover overlay with pending review
+          stopTimer()
+          setShowTurnover('fumble')
+          setPendingTurnoverReview('fumble')
+          break
+        case 'interception':
+          // Same as D&D turnover quick action - shows turnover overlay with pending review
+          stopTimer()
+          setShowTurnover('interception')
+          setPendingTurnoverReview('interception')
+          break
+        case 'sack':
+          // Big play overlay - doesn't stop clock, auto-clears after 5 seconds
+          setBigPlay('sack')
+          setTimeout(() => setBigPlay(null), 5000)
+          break
+          
+        // Penalties & Flags
+        case 'flag':
+          showFlagStage1()
+          break
+          
+        // Possession
+        case 'possessionAway':
+          setPossession('away')
+          break
+        case 'possessionHome':
+          setPossession('home')
+          break
+        case 'possessionNone':
+          setPossession(null)
+          break
+        case 'togglePossessionVisible':
+          setHidePossession(prev => !prev)
+          break
+          
+        // Timeouts
+        case 'timeoutAway':
+          stopTimer()
+          useTimeout('away')
+          break
+        case 'timeoutHome':
+          stopTimer()
+          useTimeout('home')
+          break
+        case 'toggleTimeoutsVisible':
+          setHideTimeouts(prev => !prev)
+          break
+          
+        // Overlays
+        case 'injury':
+          setShowInjury(prev => !prev)
+          if (!showInjury) stopTimer()
+          break
+        case 'commercial':
+          // Toggle ad-break game status
+          stopTimer()
+          setGameStatus(prev => prev === 'ad-break' ? null : 'ad-break')
+          break
+          
+        // Quick Actions
+        case 'kickoff':
+          setGameStatus('kickoff')
+          setHideDownDistance(true)
+          setPossession(null)
+          setShowKickoffChoice(true)
+          break
+        case 'punt':
+          stopTimer()
+          // Toggle possession for punt
+          setPossession(prev => prev === 'home' ? 'away' : 'home')
+          setDown(1)
+          setDistance(10)
+          break
+        case 'undoLast':
+          // Clear any active overlays
+          setBigPlay(null)
+          setShowIncomplete(false)
+          setShowTurnover(null)
+          setShowFirstDown(false)
+          setFlagDisplayStage(0)
+          break
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [game, timerRunning, awayTimeouts, homeTimeouts, possession, playClockRunning, playClock, down, showPATAttempt, showFGAttempt, showInjury, keybindsEnabled])
 
   // Sync game state to backend when key values change
   useEffect(() => {
@@ -539,9 +873,12 @@ export default function LiveGamePage({ standalone = false }) {
       kickoffReceiver,
       showKickoffChoice,
       injuryTeam,
+      showInjury,
       extraInfo,
       hidePossession,
       hideClock,
+      displayStats,
+      quickStats,
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -559,7 +896,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, extraInfo, hidePossession, hideClock])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hideClock, displayStats, quickStats])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -663,6 +1000,18 @@ export default function LiveGamePage({ standalone = false }) {
     const newScore = Math.max(0, currentScore + delta)
     console.log('Updating score:', { field, currentScore, newScore })
     
+    // Track points by quarter in quick stats
+    if (delta > 0) {
+      const qtr = game.quarter || 'Q1'
+      const qKey = qtr.startsWith('OT') ? 'ot' : qtr.toLowerCase()
+      if (['q1', 'q2', 'q3', 'q4', 'ot'].includes(qKey)) {
+        setQuickStats(s => ({
+          ...s,
+          [team]: {...s[team], [qKey]: s[team][qKey] + delta}
+        }))
+      }
+    }
+    
     // Trigger celebration overlay for TDs, FGs, Safeties, and conversions
     if (delta === 6 || delta === 7 || delta === 8) {
       // Touchdown - show celebration first, then update score after animation
@@ -689,6 +1038,17 @@ export default function LiveGamePage({ standalone = false }) {
     const field = team === 'home' ? 'home_score' : 'away_score'
     const currentScore = team === 'home' ? game.home_score : game.away_score
     const newScore = currentScore + 2
+    
+    // Track points by quarter in quick stats
+    const qtr = game.quarter || 'Q1'
+    const qKey = qtr.startsWith('OT') ? 'ot' : qtr.toLowerCase()
+    if (['q1', 'q2', 'q3', 'q4', 'ot'].includes(qKey)) {
+      setQuickStats(s => ({
+        ...s,
+        [team]: {...s[team], [qKey]: s[team][qKey] + 2}
+      }))
+    }
+    
     await updateGame({ [field]: newScore })
     setScoreCelebration({ type: 'safety', team, points: 2 })
     setTimeout(() => {
@@ -739,39 +1099,7 @@ export default function LiveGamePage({ standalone = false }) {
   }
 
   async function endGame() {
-    await updateGame({ status: 'final', quarter: 'Final' })
-    stopTimer()
-    
-    // Update actual team records in the database (only for league games)
-    if (!standalone && game.home_team?.id && game.away_team?.id && originalRecords.home && originalRecords.away) {
-      try {
-        const homeWon = game.home_score > game.away_score
-        const awayWon = game.away_score > game.home_score
-        const tied = game.home_score === game.away_score
-        
-        // Update home team record (use originalRecords for fresh data)
-        await teamApi.update(game.home_team.id, {
-          wins: originalRecords.home.wins + (homeWon ? 1 : 0),
-          losses: originalRecords.home.losses + (awayWon ? 1 : 0),
-          ties: (originalRecords.home.ties || 0) + (tied ? 1 : 0),
-          points_for: (originalRecords.home.points_for || 0) + game.home_score,
-          points_against: (originalRecords.home.points_against || 0) + game.away_score,
-        })
-        
-        // Update away team record (use originalRecords for fresh data)
-        await teamApi.update(game.away_team.id, {
-          wins: originalRecords.away.wins + (awayWon ? 1 : 0),
-          losses: originalRecords.away.losses + (homeWon ? 1 : 0),
-          ties: (originalRecords.away.ties || 0) + (tied ? 1 : 0),
-          points_for: (originalRecords.away.points_for || 0) + game.away_score,
-          points_against: (originalRecords.away.points_against || 0) + game.home_score,
-        })
-        
-        console.log('Team records updated in database')
-      } catch (err) {
-        console.error('Failed to update team records:', err)
-      }
-    }
+    await finalizeGame()
   }
 
   async function resetGame() {
@@ -789,6 +1117,68 @@ export default function LiveGamePage({ standalone = false }) {
     stopTimer()
   }
 
+  // Helper to finalize game and sync bracket
+  async function finalizeGame() {
+    await updateGame({ quarter: 'Final', status: 'final' })
+    setGameStatus('final')
+    setPossession(null)
+    setHideDownDistance(true)
+    stopTimer()
+    
+    // Auto-sync to linked bracket match
+    if (linkedBracketMatch) {
+      try {
+        let winner_id = null
+        if (game.home_score > game.away_score) {
+          winner_id = game.home_team?.id
+        } else if (game.away_score > game.home_score) {
+          winner_id = game.away_team?.id
+        }
+
+        await bracketApi.updateMatch(linkedBracketMatch.id, {
+          team1_score: game.home_score,
+          team2_score: game.away_score,
+          status: 'completed',
+          winner_id,
+        })
+        
+        setBracketSynced(true)
+        console.log('Bracket match auto-synced')
+      } catch (error) {
+        console.error('Failed to auto-sync to bracket:', error)
+      }
+    }
+    
+    // Update team records (only for league games)
+    if (!standalone && game.home_team?.id && game.away_team?.id && originalRecords.home && originalRecords.away) {
+      try {
+        const homeWon = game.home_score > game.away_score
+        const awayWon = game.away_score > game.home_score
+        const tied = game.home_score === game.away_score
+        
+        await teamApi.update(game.home_team.id, {
+          wins: originalRecords.home.wins + (homeWon ? 1 : 0),
+          losses: originalRecords.home.losses + (awayWon ? 1 : 0),
+          ties: (originalRecords.home.ties || 0) + (tied ? 1 : 0),
+          points_for: (originalRecords.home.points_for || 0) + game.home_score,
+          points_against: (originalRecords.home.points_against || 0) + game.away_score,
+        })
+        
+        await teamApi.update(game.away_team.id, {
+          wins: originalRecords.away.wins + (awayWon ? 1 : 0),
+          losses: originalRecords.away.losses + (homeWon ? 1 : 0),
+          ties: (originalRecords.away.ties || 0) + (tied ? 1 : 0),
+          points_for: (originalRecords.away.points_for || 0) + game.away_score,
+          points_against: (originalRecords.away.points_against || 0) + game.home_score,
+        })
+        
+        console.log('Team records updated in database')
+      } catch (err) {
+        console.error('Failed to update team records:', err)
+      }
+    }
+  }
+
   // Quarter change functions
   async function nextQuarter() {
     console.log('nextQuarter called, current quarter:', game.quarter)
@@ -796,11 +1186,7 @@ export default function LiveGamePage({ standalone = false }) {
     // Handle extended OT periods (OT2, OT3, etc.)
     if (game.quarter?.startsWith('OT') && game.quarter !== 'OT') {
       // In extended OT, next is Final
-      await updateGame({ quarter: 'Final' })
-      setGameStatus('final')
-      setPossession(null)
-      setHideDownDistance(true)
-      stopTimer()
+      await finalizeGame()
       return
     }
     
@@ -831,11 +1217,7 @@ export default function LiveGamePage({ standalone = false }) {
       // Check if game is tied - if not, go straight to Final
       if (game.home_score !== game.away_score) {
         // Game not tied, skip OT and go to Final
-        await updateGame({ quarter: 'Final' })
-        setGameStatus('final')
-        setPossession(null)
-        setHideDownDistance(true)
-        stopTimer()
+        await finalizeGame()
         return
       }
       // Overtime - typically shorter time
@@ -843,11 +1225,7 @@ export default function LiveGamePage({ standalone = false }) {
       setGameStatus(null)
     } else if (nextQ === 'Final') {
       // Game over
-      await updateGame({ quarter: nextQ })
-      setGameStatus('final')
-      setPossession(null)
-      setHideDownDistance(true)
-      stopTimer()
+      await finalizeGame()
     } else {
       // Regular quarter change (Q1->Q2, Q3->Q4)
       await updateGame({ quarter: nextQ, game_time: '15:00' })
@@ -990,21 +1368,21 @@ export default function LiveGamePage({ standalone = false }) {
   function stopTimer() {
     timerRunningRef.current = false
     setTimerRunning(false)
-    // Save stopped state to backend
-    api.update(gameId, { timer_running: false }).catch(() => {})
-    return game?.game_time
+    // Ignore WebSocket game_time updates for 2 seconds to prevent race conditions
+    ignoreWsTimeUntilRef.current = Date.now() + 2000
+    // Save stopped state AND current time to backend
+    const currentTime = gameRef.current?.game_time || game?.game_time
+    if (currentTime) {
+      api.update(gameId, { timer_running: false, game_time: currentTime }).catch(() => {})
+    } else {
+      api.update(gameId, { timer_running: false }).catch(() => {})
+    }
+    return currentTime
   }
 
   function toggleTimer() {
     if (timerRunning) {
-      stopTimer()
-      // Sync current time to server - use callback to get latest state
-      setGame(prev => {
-        if (prev) {
-          api.update(gameId, { game_time: prev.game_time }).catch(() => {})
-        }
-        return prev
-      })
+      stopTimer() // stopTimer now syncs time to backend
     } else {
       startTimer()
     }
@@ -1026,6 +1404,7 @@ export default function LiveGamePage({ standalone = false }) {
     setPlayClockRunning(true)
     if (forceSeconds !== null) {
       setPlayClock(forceSeconds)
+      playClockRef.current = forceSeconds
     }
     // Tick immediately
     doPlayClockTick()
@@ -1036,6 +1415,7 @@ export default function LiveGamePage({ standalone = false }) {
     
     setPlayClock(prev => {
       const newSeconds = Math.max(0, prev - 1)
+      playClockRef.current = newSeconds // Keep ref in sync
       if (newSeconds <= 0) {
         playClockRunningRef.current = false
         setPlayClockRunning(false)
@@ -1058,11 +1438,13 @@ export default function LiveGamePage({ standalone = false }) {
   function resetPlayClock(seconds = 40) {
     stopPlayClock()
     setPlayClock(seconds)
+    playClockRef.current = seconds
   }
 
   function adjustPlayClock(seconds) {
     const newSeconds = Math.max(0, Math.min(99, playClock + seconds))
     setPlayClock(newSeconds)
+    playClockRef.current = newSeconds
   }
 
   function togglePlayClock() {
@@ -1142,6 +1524,14 @@ export default function LiveGamePage({ standalone = false }) {
       setTimeoutTeam('home')
       setShowTimeoutDisplay(true)
       setPendingTimeoutDuration('home')
+      // Auto-hide timeout overlay after 5-10 seconds (min 5, max 10)
+      setTimeout(() => {
+        setShowTimeoutDisplay(false)
+      }, 5000) // Min 5 seconds
+      setTimeout(() => {
+        setShowTimeoutDisplay(false)
+        setTimeoutTeam(null)
+      }, 10000) // Max 10 seconds - force hide
     } else if (team === 'away' && awayTimeouts > 0) {
       const usedIndex = awayTimeouts // The timeout being used (before decrement)
       setUsedTimeoutIndex(usedIndex)
@@ -1152,6 +1542,14 @@ export default function LiveGamePage({ standalone = false }) {
       setTimeoutTeam('away')
       setShowTimeoutDisplay(true)
       setPendingTimeoutDuration('away')
+      // Auto-hide timeout overlay after 5-10 seconds (min 5, max 10)
+      setTimeout(() => {
+        setShowTimeoutDisplay(false)
+      }, 5000) // Min 5 seconds
+      setTimeout(() => {
+        setShowTimeoutDisplay(false)
+        setTimeoutTeam(null)
+      }, 10000) // Max 10 seconds - force hide
     }
   }
 
@@ -1458,6 +1856,18 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Apply penalty - update D&D based on penalty and hide flag
   function applyPenalty() {
+    // Track penalties in quick stats
+    selectedPenalties.forEach(sp => {
+      setQuickStats(s => ({
+        ...s,
+        [sp.team]: {
+          ...s[sp.team],
+          penalties: s[sp.team].penalties + 1,
+          penaltyYards: s[sp.team].penaltyYards + (sp.penalty.yards || 0)
+        }
+      }))
+    })
+    
     // Update D&D based on penalty only when Apply is clicked
     // Don't change anything if it's "&Goal" - half the distance to goal is handled manually
     if (specialDistance !== 'goal' && selectedPenalties.length > 0) {
@@ -1701,7 +2111,7 @@ export default function LiveGamePage({ standalone = false }) {
   }
 
   function copyShareLink() {
-    const url = `${window.location.origin}/share/game/${game.share_code}`
+    const url = `https://gridiron.kropp.cloud/share/game/${game.share_code}`
     navigator.clipboard.writeText(url)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
@@ -1798,6 +2208,11 @@ export default function LiveGamePage({ standalone = false }) {
   if (game.simple_mode) {
     return (
       <div className="space-y-6 max-w-2xl mx-auto px-4">
+        {/* Floating help button */}
+        <div className="fixed bottom-6 right-6 z-50">
+          <HelpButton context="scoreboard" className="shadow-lg" />
+        </div>
+
         {/* Simple Mode Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Simple Scoreboard</h1>
@@ -1806,6 +2221,83 @@ export default function LiveGamePage({ standalone = false }) {
             Share
           </Button>
         </div>
+
+        {/* FG Distance Dialog (for keybind) */}
+        <Dialog open={showFGDistanceDialog} onOpenChange={setShowFGDistanceDialog}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>🥅 Field Goal Attempt</DialogTitle>
+              <DialogDescription>
+                Set the distance for the field goal attempt
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              {/* Distance adjuster */}
+              <div className="flex items-center justify-center gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="h-10 w-10 p-0 text-lg"
+                  onClick={() => setFgDistance(Math.max(18, fgDistance - 5))}
+                >-5</Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="h-10 w-10 p-0 text-lg"
+                  onClick={() => setFgDistance(Math.max(18, fgDistance - 1))}
+                >-</Button>
+                <span className="text-4xl font-bold text-blue-600 w-20 text-center">{fgDistance}</span>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="h-10 w-10 p-0 text-lg"
+                  onClick={() => setFgDistance(Math.min(70, fgDistance + 1))}
+                >+</Button>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="h-10 w-10 p-0 text-lg"
+                  onClick={() => setFgDistance(Math.min(70, fgDistance + 5))}
+                >+5</Button>
+              </div>
+              <p className="text-center text-slate-500">yards</p>
+              
+              {/* Quick select buttons */}
+              <div className="flex flex-wrap gap-2 justify-center">
+                {[20, 25, 30, 35, 40, 45, 50, 55, 60].map(d => (
+                  <Button
+                    key={d}
+                    variant={fgDistance === d ? "default" : "outline"}
+                    size="sm"
+                    className={fgDistance === d ? "bg-blue-600 hover:bg-blue-700" : ""}
+                    onClick={() => setFgDistance(d)}
+                  >
+                    {d}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                className="flex-1"
+                onClick={() => setShowFGDistanceDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+                onClick={() => {
+                  setShowFGDistanceDialog(false)
+                  setShowFGAttempt(true)
+                  stopTimer()
+                }}
+              >
+                🥅 Attempt {fgDistance} yd FG
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Share Dialog */}
         <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
@@ -1929,6 +2421,7 @@ export default function LiveGamePage({ standalone = false }) {
               {/* Quarter Selector */}
               <div className="flex items-center justify-center gap-2">
                 {[
+                  { value: 'Pregame', label: 'Pre', time: '0:00' },
                   { value: 'Q1', label: 'Q1', time: '15:00' },
                   { value: 'Q2', label: 'Q2', time: '15:00' },
                   { value: 'Halftime', label: 'Half', time: '13:00' },
@@ -1942,8 +2435,6 @@ export default function LiveGamePage({ standalone = false }) {
                     size="sm"
                     variant={game.quarter === q.value ? 'default' : 'outline'}
                     onClick={() => {
-                      // Clear any game status first
-                      setGameStatus(null)
                       // Stop timer if running
                       stopTimer()
                       // Reset time to quarter default if current time is less
@@ -1953,6 +2444,21 @@ export default function LiveGamePage({ standalone = false }) {
                       // Update quarter and time
                       api.update(gameId, { quarter: q.value, game_time: newTime })
                       setGame(prev => ({ ...prev, quarter: q.value, game_time: newTime }))
+                      // Handle special quarter states
+                      if (q.value === 'Halftime') {
+                        setGameStatus('halftime-show')
+                        setPossession(null)
+                        setHideDownDistance(true)
+                      } else if (q.value === 'Final') {
+                        setGameStatus('final')
+                        setPossession(null)
+                        setHideDownDistance(true)
+                      } else if (q.value === 'Pregame') {
+                        setGameStatus('pregame')
+                      } else {
+                        setGameStatus(null)
+                        setHideDownDistance(false)
+                      }
                     }}
                   >
                     {q.label}
@@ -2057,80 +2563,6 @@ export default function LiveGamePage({ standalone = false }) {
           </Card>
         </div>
 
-        {/* OBS Options */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Video className="h-5 w-5" />
-              OBS / Streaming
-            </CardTitle>
-            <CardDescription>
-              Use these URLs in OBS Browser Source for a clean scoreboard overlay
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Layout Options */}
-            <div className="grid grid-cols-4 gap-3">
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col gap-1"
-                onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}`)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
-                }}
-              >
-                <span className="text-sm font-semibold">Full</span>
-                <span className="text-xs text-slate-500">Standard</span>
-                <Copy className="h-3 w-3 mt-1" />
-              </Button>
-              
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col gap-1"
-                onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}?layout=fox`)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
-                }}
-              >
-                <span className="text-sm font-semibold">Compact</span>
-                <span className="text-xs text-slate-500">Corner bug</span>
-                <Copy className="h-3 w-3 mt-1" />
-              </Button>
-              
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col gap-1"
-                onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}?layout=centered`)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
-                }}
-              >
-                <span className="text-sm font-semibold">Centered</span>
-                <span className="text-xs text-slate-500">Large</span>
-                <Copy className="h-3 w-3 mt-1" />
-              </Button>
-              
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col gap-1"
-                onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}?layout=slim`)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
-                }}
-              >
-                <span className="text-sm font-semibold">Slim</span>
-                <span className="text-xs text-slate-500">Bottom bar</span>
-                <Copy className="h-3 w-3 mt-1" />
-              </Button>
-            </div>
-
-          </CardContent>
-        </Card>
-
         {/* Reset Scores */}
         <div className="flex justify-center">
           <Button
@@ -2153,9 +2585,94 @@ export default function LiveGamePage({ standalone = false }) {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4">
+      {/* First-time tutorial - only shows when game is live */}
+      <FirstTimeTutorial context="game" storageKey="tutorial_seen_game" when={game.status === 'live'} />
+      
+      {/* Floating help button */}
+      <div className="fixed bottom-6 right-6 z-50">
+        <HelpButton context="game" className="shadow-lg" />
+      </div>
+
+      {/* FG Distance Dialog (for keybind) */}
+      <Dialog open={showFGDistanceDialog} onOpenChange={setShowFGDistanceDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>🥅 Field Goal Attempt</DialogTitle>
+            <DialogDescription>
+              Set the distance for the field goal attempt
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {/* Distance adjuster */}
+            <div className="flex items-center justify-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                className="h-10 w-10 p-0 text-lg"
+                onClick={() => setFgDistance(Math.max(18, fgDistance - 5))}
+              >-5</Button>
+              <Button 
+                variant="outline" 
+                size="sm"
+                className="h-10 w-10 p-0 text-lg"
+                onClick={() => setFgDistance(Math.max(18, fgDistance - 1))}
+              >-</Button>
+              <span className="text-4xl font-bold text-blue-600 w-20 text-center">{fgDistance}</span>
+              <Button 
+                variant="outline" 
+                size="sm"
+                className="h-10 w-10 p-0 text-lg"
+                onClick={() => setFgDistance(Math.min(70, fgDistance + 1))}
+              >+</Button>
+              <Button 
+                variant="outline" 
+                size="sm"
+                className="h-10 w-10 p-0 text-lg"
+                onClick={() => setFgDistance(Math.min(70, fgDistance + 5))}
+              >+5</Button>
+            </div>
+            <p className="text-center text-slate-500">yards</p>
+            
+            {/* Quick select buttons */}
+            <div className="flex flex-wrap gap-2 justify-center">
+              {[20, 25, 30, 35, 40, 45, 50, 55, 60].map(d => (
+                <Button
+                  key={d}
+                  variant={fgDistance === d ? "default" : "outline"}
+                  size="sm"
+                  className={fgDistance === d ? "bg-blue-600 hover:bg-blue-700" : ""}
+                  onClick={() => setFgDistance(d)}
+                >
+                  {d}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              className="flex-1"
+              onClick={() => setShowFGDistanceDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button 
+              className="flex-1 bg-blue-600 hover:bg-blue-700"
+              onClick={() => {
+                setShowFGDistanceDialog(false)
+                setShowFGAttempt(true)
+                stopTimer()
+              }}
+            >
+              🥅 Attempt {fgDistance} yd FG
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Scoreboard Preview - NOW AT TOP */}
       {game.status === 'live' && (
-        <Card className="border-2 border-slate-300 overflow-visible">
+        <Card className="border-2 border-slate-300 overflow-visible" data-tutorial="display-preview">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg flex items-center gap-2">
               <Eye className="h-5 w-5" />
@@ -2221,9 +2738,12 @@ export default function LiveGamePage({ standalone = false }) {
               kickoffReceiver={kickoffReceiver}
               showKickoffChoice={showKickoffChoice}
               injuryTeam={injuryTeam}
+              showInjury={showInjury}
               extraInfo={extraInfo}
               hidePossession={hidePossession}
               hideClock={hideClock}
+              displayStats={displayStats}
+              quickStats={quickStats}
             />
           </CardContent>
         </Card>
@@ -2233,7 +2753,7 @@ export default function LiveGamePage({ standalone = false }) {
 
       {/* Scoring Controls - Right below preview */}
       {game.status === 'live' && (
-        <div className="grid md:grid-cols-2 gap-4">
+        <div className="grid md:grid-cols-2 gap-4" data-tutorial="scoring-panel">
           {/* Away Team Scoring */}
           <Card>
             <CardHeader className="pb-2" style={{ borderLeftWidth: '4px', borderLeftColor: game.away_team.color }}>
@@ -2276,6 +2796,20 @@ export default function LiveGamePage({ standalone = false }) {
               {/* TD Details Panel */}
               {showTDPanel === 'away' && (
                 <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg space-y-3">
+                  {/* Quick TD - no details needed */}
+                  <Button 
+                    className="w-full bg-green-600 hover:bg-green-700"
+                    onClick={() => {
+                      updateScore('away', 6)
+                      setShowTDPanel(null)
+                      setTdYards('')
+                      setPendingPAT('away')
+                      setHideDownDistance(true)
+                    }}
+                  >
+                    Quick TD (+6)
+                  </Button>
+                  <div className="text-xs text-center text-slate-500">— or add details —</div>
                   <div className="flex items-center gap-2">
                     <Input
                       type="number"
@@ -2303,18 +2837,19 @@ export default function LiveGamePage({ standalone = false }) {
                     </div>
                   </div>
                   <Button 
-                    className="w-full bg-green-600 hover:bg-green-700"
+                    variant="outline"
+                    className="w-full border-green-600 text-green-700 hover:bg-green-50"
                     onClick={() => {
                       const yards = tdYards
                       const type = tdType
-                      updateScore('away', 6, { yards, playType: type })
+                      updateScore('away', 6, { yards: yards || null, playType: yards ? type : null })
                       setShowTDPanel(null)
                       setTdYards('')
                       setPendingPAT('away')
                       setHideDownDistance(true)
                     }}
                   >
-                    Score TD {tdYards ? `(${tdYards} yd ${tdType})` : ''}
+                    TD with Details {tdYards ? `(${tdYards} yd ${tdType})` : ''}
                   </Button>
                 </div>
               )}
@@ -2419,6 +2954,20 @@ export default function LiveGamePage({ standalone = false }) {
               {/* TD Details Panel */}
               {showTDPanel === 'home' && (
                 <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg space-y-3">
+                  {/* Quick TD - no details needed */}
+                  <Button 
+                    className="w-full bg-green-600 hover:bg-green-700"
+                    onClick={() => {
+                      updateScore('home', 6)
+                      setShowTDPanel(null)
+                      setTdYards('')
+                      setPendingPAT('home')
+                      setHideDownDistance(true)
+                    }}
+                  >
+                    Quick TD (+6)
+                  </Button>
+                  <div className="text-xs text-center text-slate-500">— or add details —</div>
                   <div className="flex items-center gap-2">
                     <Input
                       type="number"
@@ -2446,18 +2995,19 @@ export default function LiveGamePage({ standalone = false }) {
                     </div>
                   </div>
                   <Button 
-                    className="w-full bg-green-600 hover:bg-green-700"
+                    variant="outline"
+                    className="w-full border-green-600 text-green-700 hover:bg-green-50"
                     onClick={() => {
                       const yards = tdYards
                       const type = tdType
-                      updateScore('home', 6, { yards, playType: type })
+                      updateScore('home', 6, { yards: yards || null, playType: yards ? type : null })
                       setShowTDPanel(null)
                       setTdYards('')
                       setPendingPAT('home')
                       setHideDownDistance(true)
                     }}
                   >
-                    Score TD {tdYards ? `(${tdYards} yd ${tdType})` : ''}
+                    TD with Details {tdYards ? `(${tdYards} yd ${tdType})` : ''}
                   </Button>
                 </div>
               )}
@@ -2526,7 +3076,7 @@ export default function LiveGamePage({ standalone = false }) {
       {game.status === 'live' && (
         <div className="grid lg:grid-cols-2 gap-4">
           {/* Game Clock & Play Clock Controls */}
-          <Card>
+          <Card data-tutorial="game-clock">
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">Clock Controls</CardTitle>
             </CardHeader>
@@ -2695,34 +3245,112 @@ export default function LiveGamePage({ standalone = false }) {
                   </Button>
                 </div>
                 
-                {/* Delay of Game button - appears when play clock is 0 */}
+                {/* Delay of Game and Timeout options - appears when play clock is 0 */}
                 {playClock === 0 && (
-                  <Button 
-                    className="w-full mt-2 bg-yellow-500 hover:bg-yellow-600 text-black font-bold gap-2"
-                    onClick={() => {
-                      const delayPenalty = NFL_PENALTIES.find(p => p.name === 'Delay of Game')
-                      const offenseTeam = possession || 'home'
-                      if (delayPenalty) {
-                        const penaltyRecord = {
-                          team: offenseTeam,
-                          teamName: offenseTeam === 'home' ? game.home_team.name : game.away_team.name,
-                          teamAbbreviation: offenseTeam === 'home' ? game.home_team.abbreviation : game.away_team.abbreviation,
-                          teamColor: offenseTeam === 'home' ? game.home_team.color : game.away_team.color,
-                          teamLogo: offenseTeam === 'home' ? game.home_team.logo_url : game.away_team.logo_url,
-                          name: delayPenalty.name,
-                          yards: delayPenalty.yards,
-                          quarter: game.quarter,
-                          time: game.game_time,
+                  <div className="mt-2 space-y-2">
+                    <Button 
+                      className="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-bold gap-2"
+                      onClick={() => {
+                        const delayPenalty = NFL_PENALTIES.find(p => p.name === 'Delay of Game')
+                        const offenseTeam = possession || 'home'
+                        if (delayPenalty) {
+                          const penaltyRecord = {
+                            team: offenseTeam,
+                            teamName: offenseTeam === 'home' ? game.home_team.name : game.away_team.name,
+                            teamAbbreviation: offenseTeam === 'home' ? game.home_team.abbreviation : game.away_team.abbreviation,
+                            teamColor: offenseTeam === 'home' ? game.home_team.color : game.away_team.color,
+                            teamLogo: offenseTeam === 'home' ? game.home_team.logo_url : game.away_team.logo_url,
+                            name: delayPenalty.name,
+                            yards: delayPenalty.yards,
+                            quarter: game.quarter,
+                            time: game.game_time,
+                          }
+                          setSelectedPenalties([{ penalty: delayPenalty, team: offenseTeam }])
+                          setDisplayedPenalties([penaltyRecord])
+                          setFlagDisplayStage(2)
+                          resetPlayClock(40)
                         }
-                        setSelectedPenalties([{ penalty: delayPenalty, team: offenseTeam }])
-                        setDisplayedPenalties([penaltyRecord])
-                        setFlagDisplayStage(2)
-                        resetPlayClock(40)
-                      }
-                    }}
-                  >
-                    🚩 Delay of Game
-                  </Button>
+                      }}
+                    >
+                      🚩 Delay of Game
+                    </Button>
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* Away Team Timeout */}
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-center" style={{ color: game.away_team?.color }}>
+                          {game.away_team?.abbreviation || 'AWY'} TO ({awayTimeouts})
+                        </p>
+                        <div className="grid grid-cols-2 gap-1">
+                          <Button 
+                            size="sm"
+                            variant="outline"
+                            className="text-xs px-1"
+                            style={{ borderColor: game.away_team?.color, color: game.away_team?.color }}
+                            onClick={() => {
+                              useTimeout('away')
+                              startTimeoutClock(30)
+                              setPendingTimeoutDuration(null)
+                            }}
+                            disabled={awayTimeouts === 0}
+                          >
+                            30s
+                          </Button>
+                          <Button 
+                            size="sm"
+                            variant="outline"
+                            className="text-xs px-1"
+                            style={{ borderColor: game.away_team?.color, color: game.away_team?.color }}
+                            onClick={() => {
+                              useTimeout('away')
+                              startTimeoutClock(120)
+                              setPendingTimeoutDuration(null)
+                              setShowAdBreakPrompt(true)
+                            }}
+                            disabled={awayTimeouts === 0}
+                          >
+                            2m
+                          </Button>
+                        </div>
+                      </div>
+                      {/* Home Team Timeout */}
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-center" style={{ color: game.home_team?.color }}>
+                          {game.home_team?.abbreviation || 'HME'} TO ({homeTimeouts})
+                        </p>
+                        <div className="grid grid-cols-2 gap-1">
+                          <Button 
+                            size="sm"
+                            variant="outline"
+                            className="text-xs px-1"
+                            style={{ borderColor: game.home_team?.color, color: game.home_team?.color }}
+                            onClick={() => {
+                              useTimeout('home')
+                              startTimeoutClock(30)
+                              setPendingTimeoutDuration(null)
+                            }}
+                            disabled={homeTimeouts === 0}
+                          >
+                            30s
+                          </Button>
+                          <Button 
+                            size="sm"
+                            variant="outline"
+                            className="text-xs px-1"
+                            style={{ borderColor: game.home_team?.color, color: game.home_team?.color }}
+                            onClick={() => {
+                              useTimeout('home')
+                              startTimeoutClock(120)
+                              setPendingTimeoutDuration(null)
+                              setShowAdBreakPrompt(true)
+                            }}
+                            disabled={homeTimeouts === 0}
+                          >
+                            2m
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
@@ -2764,7 +3392,7 @@ export default function LiveGamePage({ standalone = false }) {
         </Card>
 
           {/* Down & Distance Controls */}
-          <Card>
+          <Card data-tutorial="down-distance">
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">Down & Distance</CardTitle>
             </CardHeader>
@@ -2917,6 +3545,11 @@ export default function LiveGamePage({ standalone = false }) {
                   setShowDownOnly(false)
                   setShowFirstDown(true)
                   setTimeout(() => setShowFirstDown(false), 3000)
+                  // Track first down in quick stats
+                  setQuickStats(s => ({
+                    ...s,
+                    [possession]: {...s[possession], firstDowns: s[possession].firstDowns + 1}
+                  }))
                 }}
               >
                 ⬇️ First Down!
@@ -3655,6 +4288,12 @@ export default function LiveGamePage({ standalone = false }) {
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
                       // Confirm turnover - no review
+                      // Track turnover in quick stats (offense loses ball)
+                      const offenseTeam = possession
+                      setQuickStats(s => ({
+                        ...s,
+                        [offenseTeam]: {...s[offenseTeam], turnovers: s[offenseTeam].turnovers + 1}
+                      }))
                       togglePossession()
                       setPendingTurnoverReview(null)
                       setTimeout(() => { 
@@ -3786,6 +4425,12 @@ export default function LiveGamePage({ standalone = false }) {
                   <Button 
                     className="bg-red-600 hover:bg-red-700"
                     onClick={() => {
+                      // Track fumble turnover in quick stats (offense loses ball)
+                      const offenseTeam = possession
+                      setQuickStats(s => ({
+                        ...s,
+                        [offenseTeam]: {...s[offenseTeam], turnovers: s[offenseTeam].turnovers + 1}
+                      }))
                       setPendingFumble(false)
                       togglePossession()
                       setShowFumbleRecovery('defense')
@@ -5536,7 +6181,7 @@ export default function LiveGamePage({ standalone = false }) {
             
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <p className="text-xs font-medium text-slate-500">Side</p>
+                <p className="text-xs font-medium text-slate-500">Position</p>
                 <div className="flex gap-1">
                   <Button 
                     size="sm" 
@@ -5555,6 +6200,14 @@ export default function LiveGamePage({ standalone = false }) {
                     onClick={() => setExtraInfo(prev => ({ ...prev, side: 'home' }))}
                   >
                     {game.home_team?.abbreviation || 'HME'}
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant={extraInfo.side === 'bottom' ? 'default' : 'outline'}
+                    className="flex-1"
+                    onClick={() => setExtraInfo(prev => ({ ...prev, side: 'bottom' }))}
+                  >
+                    Bottom
                   </Button>
                 </div>
               </div>
@@ -5743,58 +6396,63 @@ export default function LiveGamePage({ standalone = false }) {
               </Button>
             </div>
             
-            {/* Review Reason Input */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">What's Being Reviewed</Label>
-                <Input
-                  placeholder="e.g., Touchdown, Catch/No Catch..."
-                  value={reviewReason}
-                  onChange={(e) => setReviewReason(e.target.value)}
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Call on the Field</Label>
-                <Input
-                  placeholder="e.g., Touchdown, Incomplete..."
-                  value={reviewCallOnField}
-                  onChange={(e) => setReviewCallOnField(e.target.value)}
-                  className="mt-1"
-                />
-              </div>
-            </div>
-            
-            {/* Common Review Reasons */}
-            <div className="flex flex-wrap gap-2">
-              {['Touchdown', 'Catch/No Catch', 'Fumble', 'Targeting', 'Pass Interference', 'Spot of Ball', 'Clock'].map((reason) => (
-                <Button
-                  key={reason}
-                  variant="outline"
-                  size="sm"
-                  className="border-red-300 text-red-700 hover:bg-red-100"
-                  onClick={() => setReviewReason(reason)}
-                >
-                  {reason}
-                </Button>
-              ))}
-            </div>
-            
-            {/* Common Calls on Field */}
-            <div className="flex flex-wrap gap-2">
-              <span className="text-xs text-slate-500 w-full">Call on Field:</span>
-              {['Touchdown', 'No Touchdown', 'Complete', 'Incomplete', 'Fumble', 'No Fumble', 'First Down', 'Short'].map((call) => (
-                <Button
-                  key={call}
-                  variant="outline"
-                  size="sm"
-                  className="border-blue-300 text-blue-700 hover:bg-blue-100"
-                  onClick={() => setReviewCallOnField(call)}
-                >
-                  {call}
-                </Button>
-              ))}
-            </div>
+            {/* Review Details - Only show when review is active */}
+            {reviewDisplayStage > 0 && (
+              <>
+                {/* Review Reason Input */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">What's Being Reviewed</Label>
+                    <Input
+                      placeholder="e.g., Touchdown, Catch/No Catch..."
+                      value={reviewReason}
+                      onChange={(e) => setReviewReason(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Call on the Field</Label>
+                    <Input
+                      placeholder="e.g., Touchdown, Incomplete..."
+                      value={reviewCallOnField}
+                      onChange={(e) => setReviewCallOnField(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+                
+                {/* Common Review Reasons */}
+                <div className="flex flex-wrap gap-2">
+                  {['Touchdown', 'Catch/No Catch', 'Fumble', 'Targeting', 'Pass Interference', 'Spot of Ball', 'Clock'].map((reason) => (
+                    <Button
+                      key={reason}
+                      variant="outline"
+                      size="sm"
+                      className="border-red-300 text-red-700 hover:bg-red-100"
+                      onClick={() => setReviewReason(reason)}
+                    >
+                      {reason}
+                    </Button>
+                  ))}
+                </div>
+                
+                {/* Common Calls on Field */}
+                <div className="flex flex-wrap gap-2">
+                  <span className="text-xs text-slate-500 w-full">Call on Field:</span>
+                  {['Touchdown', 'No Touchdown', 'Complete', 'Incomplete', 'Fumble', 'No Fumble', 'First Down', 'Short'].map((call) => (
+                    <Button
+                      key={call}
+                      variant="outline"
+                      size="sm"
+                      className="border-blue-300 text-blue-700 hover:bg-blue-100"
+                      onClick={() => setReviewCallOnField(call)}
+                    >
+                      {call}
+                    </Button>
+                  ))}
+                </div>
+              </>
+            )}
             
             {/* Review Result Buttons */}
             {reviewDisplayStage > 0 && !reviewResult && (
@@ -5999,6 +6657,27 @@ export default function LiveGamePage({ standalone = false }) {
               
               <div className="border-t border-slate-300 dark:border-slate-600 pt-3">
                 <p className="text-sm font-semibold text-slate-600 dark:text-slate-400 mb-3 text-center">Game Controls</p>
+                
+                {/* Keybinds Toggle */}
+                <div className="flex items-center justify-between mb-3 p-2 rounded-lg bg-slate-100 dark:bg-slate-700">
+                  <div className="flex items-center gap-2">
+                    <Keyboard className="h-4 w-4 text-slate-500" />
+                    <span className="text-sm font-medium">Keybinds</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={keybindsEnabled ? 'default' : 'outline'}
+                    className={`h-7 px-3 text-xs ${keybindsEnabled ? 'bg-green-600 hover:bg-green-700' : ''}`}
+                    onClick={() => {
+                      const newEnabled = !keybindsEnabled
+                      setKeybindsEnabled(newEnabled)
+                      saveKeybindsEnabled(newEnabled)
+                    }}
+                  >
+                    {keybindsEnabled ? 'ON' : 'OFF'}
+                  </Button>
+                </div>
+                
                 <div className="flex flex-col gap-2">
                   <Button
                     variant="outline"
@@ -6023,79 +6702,443 @@ export default function LiveGamePage({ standalone = false }) {
         </div>
       )}
 
-      {/* OBS / Streaming Options */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Video className="h-5 w-5" />
-            OBS / Streaming
-          </CardTitle>
-          <CardDescription>
-            Use these URLs in OBS Browser Source for a clean scoreboard overlay
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Layout Options */}
-          <div className="grid grid-cols-4 gap-3">
+      {/* Quick Stats Panel - Full Width */}
+      {game.status === 'live' && (
+        <Card>
+          <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowQuickStats(!showQuickStats)}>
+              <CardTitle className="text-lg flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  📊 Quick Stats
+                </span>
+                <Button variant="ghost" size="sm">
+                  {showQuickStats ? '▲ Hide' : '▼ Show'}
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            {showQuickStats && (
+              <CardContent className="space-y-4">
+              {/* Points by Quarter - Editable */}
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase mb-2">Points by Quarter</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-slate-500">
+                        <th className="text-left py-1 pr-2">Team</th>
+                        <th className="text-center px-1 w-14">Q1</th>
+                        <th className="text-center px-1 w-14">Q2</th>
+                        <th className="text-center px-1 w-14">Q3</th>
+                        <th className="text-center px-1 w-14">Q4</th>
+                        <th className="text-center px-1 w-14">OT</th>
+                        <th className="text-center px-2 w-12 font-bold">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="py-1 pr-2 font-medium">{game.away_team?.abbreviation || 'Away'}</td>
+                        {['q1', 'q2', 'q3', 'q4', 'ot'].map(qKey => (
+                          <td key={qKey} className="text-center px-1">
+                            <div className="flex items-center justify-center gap-0">
+                              <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, [qKey]: Math.max(0, s.away[qKey] - 1)}}))}>-</Button>
+                              <span className="w-5 text-center">{quickStats.away[qKey]}</span>
+                              <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, [qKey]: s.away[qKey] + 1}}))}>+</Button>
+                            </div>
+                          </td>
+                        ))}
+                        <td className="text-center px-2 font-bold">{game.away_score}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1 pr-2 font-medium">{game.home_team?.abbreviation || 'Home'}</td>
+                        {['q1', 'q2', 'q3', 'q4', 'ot'].map(qKey => (
+                          <td key={qKey} className="text-center px-1">
+                            <div className="flex items-center justify-center gap-0">
+                              <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, [qKey]: Math.max(0, s.home[qKey] - 1)}}))}>-</Button>
+                              <span className="w-5 text-center">{quickStats.home[qKey]}</span>
+                              <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, [qKey]: s.home[qKey] + 1}}))}>+</Button>
+                            </div>
+                          </td>
+                        ))}
+                        <td className="text-center px-2 font-bold">{game.home_score}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Away Team Stats */}
+              <div className="border-t pt-3">
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3 flex items-center gap-2">
+                  {game.away_team?.logo_url ? (
+                    <img src={game.away_team.logo_url} alt="" className="h-5 w-5 object-contain" />
+                  ) : (
+                    <span className="w-3 h-3 rounded-full" style={{ backgroundColor: game.away_team?.color || '#6b7280' }} />
+                  )}
+                  {game.away_team?.name || 'Away Team'}
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {/* Turnovers */}
+                  <div className="bg-red-50 dark:bg-red-900/20 rounded p-2 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, away: {...s.away, turnovers: Math.max(0, s.away.turnovers - 1)}}))}>-</Button>
+                      <p className="text-lg font-bold text-red-600 w-6">{quickStats.away.turnovers}</p>
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, away: {...s.away, turnovers: s.away.turnovers + 1}}))}>+</Button>
+                    </div>
+                    <p className="text-xs text-slate-500">Turnovers</p>
+                  </div>
+                  {/* First Downs */}
+                  <div className="bg-green-50 dark:bg-green-900/20 rounded p-2 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, away: {...s.away, firstDowns: Math.max(0, s.away.firstDowns - 1)}}))}>-</Button>
+                      <p className="text-lg font-bold text-green-600 w-6">{quickStats.away.firstDowns}</p>
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, away: {...s.away, firstDowns: s.away.firstDowns + 1}}))}>+</Button>
+                    </div>
+                    <p className="text-xs text-slate-500">1st Downs</p>
+                  </div>
+                  {/* Penalties */}
+                  <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded p-2 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, away: {...s.away, penalties: Math.max(0, s.away.penalties - 1)}}))}>-</Button>
+                      <p className="text-lg font-bold text-yellow-600 w-6">{quickStats.away.penalties}</p>
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, away: {...s.away, penalties: s.away.penalties + 1}}))}>+</Button>
+                    </div>
+                    <div className="flex items-center justify-center gap-1 mt-1">
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, penaltyYards: Math.max(0, s.away.penaltyYards - 5)}}))}>-5</Button>
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, penaltyYards: Math.max(0, s.away.penaltyYards - 1)}}))}>-1</Button>
+                      <p className="text-xs font-bold text-yellow-600 w-7">{quickStats.away.penaltyYards}y</p>
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, penaltyYards: s.away.penaltyYards + 1}}))}>+1</Button>
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, penaltyYards: s.away.penaltyYards + 5}}))}>+5</Button>
+                    </div>
+                    <p className="text-xs text-slate-500">Penalties</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Home Team Stats */}
+              <div className="border-t pt-3">
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3 flex items-center gap-2">
+                  {game.home_team?.logo_url ? (
+                    <img src={game.home_team.logo_url} alt="" className="h-5 w-5 object-contain" />
+                  ) : (
+                    <span className="w-3 h-3 rounded-full" style={{ backgroundColor: game.home_team?.color || '#6b7280' }} />
+                  )}
+                  {game.home_team?.name || 'Home Team'}
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {/* Turnovers */}
+                  <div className="bg-red-50 dark:bg-red-900/20 rounded p-2 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, home: {...s.home, turnovers: Math.max(0, s.home.turnovers - 1)}}))}>-</Button>
+                      <p className="text-lg font-bold text-red-600 w-6">{quickStats.home.turnovers}</p>
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, home: {...s.home, turnovers: s.home.turnovers + 1}}))}>+</Button>
+                    </div>
+                    <p className="text-xs text-slate-500">Turnovers</p>
+                  </div>
+                  {/* First Downs */}
+                  <div className="bg-green-50 dark:bg-green-900/20 rounded p-2 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, home: {...s.home, firstDowns: Math.max(0, s.home.firstDowns - 1)}}))}>-</Button>
+                      <p className="text-lg font-bold text-green-600 w-6">{quickStats.home.firstDowns}</p>
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, home: {...s.home, firstDowns: s.home.firstDowns + 1}}))}>+</Button>
+                    </div>
+                    <p className="text-xs text-slate-500">1st Downs</p>
+                  </div>
+                  {/* Penalties */}
+                  <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded p-2 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, home: {...s.home, penalties: Math.max(0, s.home.penalties - 1)}}))}>-</Button>
+                      <p className="text-lg font-bold text-yellow-600 w-6">{quickStats.home.penalties}</p>
+                      <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-xs" onClick={() => setQuickStats(s => ({...s, home: {...s.home, penalties: s.home.penalties + 1}}))}>+</Button>
+                    </div>
+                    <div className="flex items-center justify-center gap-1 mt-1">
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, penaltyYards: Math.max(0, s.home.penaltyYards - 5)}}))}>-5</Button>
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, penaltyYards: Math.max(0, s.home.penaltyYards - 1)}}))}>-1</Button>
+                      <p className="text-xs font-bold text-yellow-600 w-7">{quickStats.home.penaltyYards}y</p>
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, penaltyYards: s.home.penaltyYards + 1}}))}>+1</Button>
+                      <Button size="sm" variant="ghost" className="h-4 px-1 p-0 text-[9px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, penaltyYards: s.home.penaltyYards + 5}}))}>+5</Button>
+                    </div>
+                    <p className="text-xs text-slate-500">Penalties</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Display Stats on Scoreboard */}
+              <div className="border-t pt-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase mb-2">Display on Scoreboard</p>
+                <div className="flex flex-wrap gap-2 justify-center">
+                  <Button 
+                    size="sm" 
+                    variant={displayStats.all ? "default" : "outline"}
+                    className={displayStats.all ? "bg-blue-600" : ""}
+                    onClick={() => setDisplayStats(prev => ({ 
+                      ...prev, 
+                      show: !prev.all,
+                      all: !prev.all,
+                      quarterScores: !prev.all,
+                      turnovers: !prev.all,
+                      firstDowns: !prev.all,
+                      penalties: !prev.all
+                    }))}
+                  >
+                    {displayStats.all ? '📺 Hide All' : '📺 Show All'}
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant={displayStats.quarterScores ? "default" : "outline"}
+                    className={displayStats.quarterScores ? "bg-purple-600" : ""}
+                    onClick={() => setDisplayStats(prev => ({ 
+                      ...prev, 
+                      show: !prev.quarterScores || prev.turnovers || prev.firstDowns || prev.penalties,
+                      quarterScores: !prev.quarterScores,
+                      all: false
+                    }))}
+                  >
+                    Qtr Scores
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant={displayStats.turnovers ? "default" : "outline"}
+                    className={displayStats.turnovers ? "bg-red-600" : ""}
+                    onClick={() => setDisplayStats(prev => ({ 
+                      ...prev, 
+                      show: prev.quarterScores || !prev.turnovers || prev.firstDowns || prev.penalties,
+                      turnovers: !prev.turnovers,
+                      all: false
+                    }))}
+                  >
+                    Turnovers
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant={displayStats.firstDowns ? "default" : "outline"}
+                    className={displayStats.firstDowns ? "bg-green-600" : ""}
+                    onClick={() => setDisplayStats(prev => ({ 
+                      ...prev, 
+                      show: prev.quarterScores || prev.turnovers || !prev.firstDowns || prev.penalties,
+                      firstDowns: !prev.firstDowns,
+                      all: false
+                    }))}
+                  >
+                    1st Downs
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant={displayStats.penalties ? "default" : "outline"}
+                    className={displayStats.penalties ? "bg-yellow-600" : ""}
+                    onClick={() => setDisplayStats(prev => ({ 
+                      ...prev, 
+                      show: prev.quarterScores || prev.turnovers || prev.firstDowns || !prev.penalties,
+                      penalties: !prev.penalties,
+                      all: false
+                    }))}
+                  >
+                    Penalties
+                  </Button>
+                  {/* Custom stat display buttons */}
+                  {quickStats.custom?.map(stat => (
+                    <Button 
+                      key={stat.id}
+                      size="sm" 
+                      variant={displayStats.customStats?.includes(stat.id) ? "default" : "outline"}
+                      style={displayStats.customStats?.includes(stat.id) ? { backgroundColor: stat.color } : {}}
+                      onClick={() => setDisplayStats(prev => {
+                        const isShowing = prev.customStats?.includes(stat.id)
+                        const newCustomStats = isShowing 
+                          ? prev.customStats.filter(id => id !== stat.id)
+                          : [...(prev.customStats || []), stat.id]
+                        return { 
+                          ...prev, 
+                          show: prev.quarterScores || prev.turnovers || prev.firstDowns || prev.penalties || newCustomStats.length > 0,
+                          customStats: newCustomStats,
+                          all: false
+                        }
+                      })}
+                    >
+                      {stat.shortLabel || stat.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Stats Section */}
+              <div className="border-t pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-slate-500 uppercase">Custom Stats</p>
+                  <Button 
+                    size="sm" 
+                    variant="outline"
+                    className="h-6 text-xs"
+                    onClick={() => {
+                      setEditingCustomStat(null)
+                      setCustomStatForm({ label: '', shortLabel: '', color: '#3b82f6' })
+                      setShowCustomStatDialog(true)
+                    }}
+                  >
+                    + Add Stat
+                  </Button>
+                </div>
+                
+                {quickStats.custom?.length > 0 ? (
+                  <div className="space-y-2">
+                    {quickStats.custom.map(stat => (
+                      <div key={stat.id} className="flex items-center gap-2 p-2 rounded-lg" style={{ backgroundColor: `${stat.color}15` }}>
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: stat.color }} />
+                        <span className="text-sm font-medium flex-1">{stat.label}</span>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            custom: s.custom.map(cs => cs.id === stat.id ? { ...cs, away: Math.max(0, cs.away - 1) } : cs)
+                          }))}>-</Button>
+                          <span className="text-sm font-bold w-6 text-center">{stat.away}</span>
+                          <span className="text-xs text-slate-400">A</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            custom: s.custom.map(cs => cs.id === stat.id ? { ...cs, away: cs.away + 1 } : cs)
+                          }))}>+</Button>
+                        </div>
+                        <span className="text-slate-300">|</span>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            custom: s.custom.map(cs => cs.id === stat.id ? { ...cs, home: Math.max(0, cs.home - 1) } : cs)
+                          }))}>-</Button>
+                          <span className="text-sm font-bold w-6 text-center">{stat.home}</span>
+                          <span className="text-xs text-slate-400">H</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            custom: s.custom.map(cs => cs.id === stat.id ? { ...cs, home: cs.home + 1 } : cs)
+                          }))}>+</Button>
+                        </div>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-6 w-6 p-0 text-slate-400 hover:text-blue-600"
+                          onClick={() => {
+                            setEditingCustomStat(stat)
+                            setCustomStatForm({ label: stat.label, shortLabel: stat.shortLabel || '', color: stat.color })
+                            setShowCustomStatDialog(true)
+                          }}
+                        >
+                          ✏️
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-6 w-6 p-0 text-slate-400 hover:text-red-600"
+                          onClick={() => setQuickStats(s => ({
+                            ...s,
+                            custom: s.custom.filter(cs => cs.id !== stat.id)
+                          }))}
+                        >
+                          ✕
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 text-center py-2">No custom stats yet. Add one to track anything!</p>
+                )}
+              </div>
+              </CardContent>
+            )}
+          </Card>
+      )}
+
+      {/* Custom Stat Dialog */}
+      <Dialog open={showCustomStatDialog} onOpenChange={setShowCustomStatDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{editingCustomStat ? 'Edit Custom Stat' : 'Add Custom Stat'}</DialogTitle>
+            <DialogDescription>
+              Create a custom stat to track anything you want
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Stat Name</Label>
+              <Input 
+                placeholder="e.g., Sacks, Rushing Yards, Catches"
+                value={customStatForm.label}
+                onChange={e => setCustomStatForm(f => ({ ...f, label: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Short Label (for display button)</Label>
+              <Input 
+                placeholder="e.g., SCK, RUSH, REC"
+                value={customStatForm.shortLabel}
+                onChange={e => setCustomStatForm(f => ({ ...f, shortLabel: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Color</Label>
+              <div className="flex gap-2">
+                <input 
+                  type="color" 
+                  value={customStatForm.color}
+                  onChange={e => setCustomStatForm(f => ({ ...f, color: e.target.value }))}
+                  className="w-10 h-10 rounded cursor-pointer"
+                />
+                <div className="flex flex-wrap gap-1">
+                  {['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280'].map(c => (
+                    <button
+                      key={c}
+                      className={`w-6 h-6 rounded ${customStatForm.color === c ? 'ring-2 ring-offset-1 ring-slate-900' : ''}`}
+                      style={{ backgroundColor: c }}
+                      onClick={() => setCustomStatForm(f => ({ ...f, color: c }))}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2">
             <Button 
               variant="outline" 
-              className="h-auto py-4 flex flex-col gap-1"
-              onClick={() => {
-                navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}`)
-                setCopied(true)
-                setTimeout(() => setCopied(false), 2000)
-              }}
+              className="flex-1"
+              onClick={() => setShowCustomStatDialog(false)}
             >
-              <span className="text-sm font-semibold">Full</span>
-              <span className="text-xs text-slate-500">Standard</span>
-              <Copy className="h-3 w-3 mt-1" />
+              Cancel
             </Button>
-            
             <Button 
-              variant="outline" 
-              className="h-auto py-4 flex flex-col gap-1"
+              className="flex-1"
+              disabled={!customStatForm.label.trim()}
               onClick={() => {
-                navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}?layout=fox`)
-                setCopied(true)
-                setTimeout(() => setCopied(false), 2000)
+                if (editingCustomStat) {
+                  // Update existing
+                  setQuickStats(s => ({
+                    ...s,
+                    custom: s.custom.map(cs => cs.id === editingCustomStat.id 
+                      ? { ...cs, label: customStatForm.label, shortLabel: customStatForm.shortLabel, color: customStatForm.color }
+                      : cs
+                    )
+                  }))
+                } else {
+                  // Add new
+                  const newStat = {
+                    id: `custom_${Date.now()}`,
+                    label: customStatForm.label,
+                    shortLabel: customStatForm.shortLabel,
+                    color: customStatForm.color,
+                    home: 0,
+                    away: 0
+                  }
+                  setQuickStats(s => ({
+                    ...s,
+                    custom: [...(s.custom || []), newStat]
+                  }))
+                }
+                setShowCustomStatDialog(false)
               }}
             >
-              <span className="text-sm font-semibold">Compact</span>
-              <span className="text-xs text-slate-500">Corner bug</span>
-              <Copy className="h-3 w-3 mt-1" />
-            </Button>
-            
-            <Button 
-              variant="outline" 
-              className="h-auto py-4 flex flex-col gap-1"
-              onClick={() => {
-                navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}?layout=centered`)
-                setCopied(true)
-                setTimeout(() => setCopied(false), 2000)
-              }}
-            >
-              <span className="text-sm font-semibold">Centered</span>
-              <span className="text-xs text-slate-500">Large</span>
-              <Copy className="h-3 w-3 mt-1" />
-            </Button>
-            
-            <Button 
-              variant="outline" 
-              className="h-auto py-4 flex flex-col gap-1"
-              onClick={() => {
-                navigator.clipboard.writeText(`${window.location.origin}/obs/${game.share_code}?layout=slim`)
-                setCopied(true)
-                setTimeout(() => setCopied(false), 2000)
-              }}
-            >
-              <span className="text-sm font-semibold">Slim</span>
-              <span className="text-xs text-slate-500">Bottom bar</span>
-              <Copy className="h-3 w-3 mt-1" />
+              {editingCustomStat ? 'Save Changes' : 'Add Stat'}
             </Button>
           </div>
-
-        </CardContent>
-      </Card>
+        </DialogContent>
+      </Dialog>
 
       {/* Share Code Banner */}
       <Card className="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-slate-900 dark:to-slate-800 border-green-200 dark:border-green-700">
@@ -6109,8 +7152,16 @@ export default function LiveGamePage({ standalone = false }) {
               <p className="text-2xl font-bold tracking-wider text-green-700 dark:text-green-400">{game.share_code}</p>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={copyShareLink} className="border-green-600 text-green-700 dark:border-green-500 dark:text-green-400">
-            Copy Link
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={copyShareLink} 
+            className={copied 
+              ? "bg-green-600 text-white border-green-600" 
+              : "border-green-600 text-green-700 dark:border-green-500 dark:text-green-400"
+            }
+          >
+            {copied ? '✓ Link Copied!' : 'Copy Link'}
           </Button>
         </CardContent>
       </Card>

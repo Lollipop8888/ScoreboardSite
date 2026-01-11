@@ -11,6 +11,7 @@ export default function SharePage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [viewerCount, setViewerCount] = useState(0)
 
   const loadData = useCallback(async () => {
     try {
@@ -52,7 +53,9 @@ export default function SharePage() {
     if (!data) return
 
     const ws = createWebSocket(type, code.toUpperCase(), (message) => {
-      if (type === 'game' && message.type === 'game_update') {
+      if (message.type === 'viewer_count') {
+        setViewerCount(message.count)
+      } else if (type === 'game' && message.type === 'game_update') {
         setData((prev) => ({ ...prev, ...message.data }))
       } else if (type === 'scoreboard') {
         if (message.type === 'player_updated') {
@@ -116,7 +119,7 @@ export default function SharePage() {
 
   // Render based on type
   if (type === 'game') {
-    return <SharedGame game={data} />
+    return <SharedGame game={data} viewerCount={viewerCount} />
   }
 
   if (type === 'scoreboard') {
@@ -134,7 +137,7 @@ export default function SharePage() {
   return null
 }
 
-function SharedGame({ game }) {
+function SharedGame({ game, viewerCount }) {
   const [liveGameTime, setLiveGameTime] = useState(null)
   
   // Live clock calculation - update every second when timer is running
@@ -201,6 +204,7 @@ function SharedGame({ game }) {
         homeTimeouts={game.home_timeouts}
         awayTimeouts={game.away_timeouts}
         gameStatus={gameStatus}
+        viewerCount={viewerCount}
       />
       <p className="text-center text-sm text-slate-500">
         Watching live • Updates automatically

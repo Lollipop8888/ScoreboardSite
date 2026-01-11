@@ -10,6 +10,7 @@ export default function OBSDisplayPage() {
   const [loading, setLoading] = useState(true)
   const [visible, setVisible] = useState(true)
   const [prevScores, setPrevScores] = useState({ home: 0, away: 0 })
+  const [viewerCount, setViewerCount] = useState(0)
 
   // URL params for customization
   const layout = searchParams.get('layout') || 'default' // default, centered, slim
@@ -47,6 +48,8 @@ export default function OBSDisplayPage() {
     const ws = createWebSocket('game', code, (message) => {
       if (message.type === 'game_update') {
         setGame((prev) => ({ ...prev, ...message.data }))
+      } else if (message.type === 'viewer_count') {
+        setViewerCount(message.count)
       }
     })
 
@@ -485,6 +488,7 @@ export default function OBSDisplayPage() {
           showTimeoutDisplay={displayState.showTimeoutDisplay}
           timeoutTeam={displayState.timeoutTeam}
           timeoutClock={displayState.timeoutClock}
+          viewerCount={viewerCount}
         />
       </div>
     </div>

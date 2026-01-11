@@ -52,12 +52,23 @@ class ConnectionManager:
         if room not in self.active_connections:
             self.active_connections[room] = set()
         self.active_connections[room].add(websocket)
+        # Broadcast updated viewer count
+        await self.broadcast_viewer_count(room)
 
     def disconnect(self, websocket: WebSocket, room: str):
         if room in self.active_connections:
             self.active_connections[room].discard(websocket)
             if not self.active_connections[room]:
                 del self.active_connections[room]
+
+    def get_viewer_count(self, room: str) -> int:
+        if room in self.active_connections:
+            return len(self.active_connections[room])
+        return 0
+
+    async def broadcast_viewer_count(self, room: str):
+        count = self.get_viewer_count(room)
+        await self.broadcast(room, {"type": "viewer_count", "count": count})
 
     async def broadcast(self, room: str, message: dict):
         if room in self.active_connections:
@@ -1858,6 +1869,7 @@ async def game_websocket(websocket: WebSocket, share_code: str):
             # Handle any client messages if needed
     except WebSocketDisconnect:
         manager.disconnect(websocket, room)
+        await manager.broadcast_viewer_count(room)
 
 
 @app.websocket("/ws/bracket/{share_code}")
@@ -1869,6 +1881,7 @@ async def bracket_websocket(websocket: WebSocket, share_code: str):
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, room)
+        await manager.broadcast_viewer_count(room)
 
 
 @app.websocket("/ws/scoreboard/{share_code}")
@@ -1880,6 +1893,7 @@ async def scoreboard_websocket(websocket: WebSocket, share_code: str):
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, room)
+        await manager.broadcast_viewer_count(room)
 
 
 # ============ Invite Endpoints ============
