@@ -226,27 +226,56 @@ export const standaloneGameApi = {
   },
 };
 
-// WebSocket helper
+// WebSocket helper with auto-reconnect
 export function createWebSocket(type, shareCode, onMessage) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws/${type}/${shareCode}`;
   
-  const ws = new WebSocket(wsUrl);
+  let ws = null;
+  let reconnectAttempts = 0;
+  let isClosed = false;
   
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      onMessage(data);
-    } catch (e) {
-      console.error('WebSocket message parse error:', e, event.data);
+  function connect() {
+    ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      reconnectAttempts = 0;
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('WebSocket message received:', data.type, data);
+        onMessage(data);
+      } catch (e) {
+        console.error('WebSocket message parse error:', e, event.data);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+    
+    ws.onclose = () => {
+      if (!isClosed && reconnectAttempts < 10) {
+        reconnectAttempts++;
+        const delay = Math.min(1000 * reconnectAttempts, 5000);
+        console.log(`WebSocket closed, reconnecting in ${delay}ms...`);
+        setTimeout(connect, delay);
+      }
+    };
+  }
+  
+  connect();
+  
+  // Return an object with close method that prevents reconnection
+  return {
+    close: () => {
+      isClosed = true;
+      if (ws) ws.close();
     }
   };
-  
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
-  };
-  
-  return ws;
 }
 
 // Invite API
@@ -255,4 +284,23 @@ export const inviteApi = {
   getPending: () => fetchApi('/invites/pending'),
   respond: (id, status) => fetchApi(`/invites/${id}`, { method: 'PUT', body: JSON.stringify({ status }) }),
   delete: (id) => fetchApi(`/invites/${id}`, { method: 'DELETE' }),
+};
+
+// Follow API
+export const followApi = {
+  getAll: () => fetchApi('/follows'),
+  followLeague: (leagueId) => fetchApi('/follows', { method: 'POST', body: JSON.stringify({ league_id: leagueId }) }),
+  followGame: (gameId) => fetchApi('/follows', { method: 'POST', body: JSON.stringify({ game_id: gameId }) }),
+  unfollowLeague: (leagueId) => fetchApi(`/follows/league/${leagueId}`, { method: 'DELETE' }),
+  unfollowGame: (gameId) => fetchApi(`/follows/game/${gameId}`, { method: 'DELETE' }),
+  delete: (id) => fetchApi(`/follows/${id}`, { method: 'DELETE' }),
+};
+
+// Notification Preferences API
+export const notificationApi = {
+  getPreferences: () => fetchApi('/notification-preferences'),
+  updatePreferences: (prefs) => fetchApi('/notification-preferences', { method: 'PUT', body: JSON.stringify(prefs) }),
+  subscribe: (subscription) => fetchApi('/push-subscriptions', { method: 'POST', body: JSON.stringify(subscription) }),
+  unsubscribe: (endpoint) => fetchApi(`/push-subscriptions?endpoint=${encodeURIComponent(endpoint)}`, { method: 'DELETE' }),
+  testNotification: () => fetchApi('/test-notification', { method: 'POST' }),
 };

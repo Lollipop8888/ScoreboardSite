@@ -30,6 +30,8 @@ const DEFAULT_KEYBINDS = {
   toggleDownOnly: { key: '2', label: 'Toggle Down Only' },
   yardsPlus5: { key: '=', label: 'Yards +5' },
   yardsMinus5: { key: '-', label: 'Yards -5' },
+  yardsPlus1: { key: '.', label: 'Yards +1' },
+  yardsMinus1: { key: ',', label: 'Yards -1' },
   toggleDDVisible: { key: '/', label: 'Show/Hide D&D' },
   
   // Play Results

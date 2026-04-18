@@ -61,6 +61,10 @@ class LeagueBase(BaseModel):
     game_unit_label_3: Optional[str] = None  # Extra unit, e.g., "Preseason Week"
     penalties: Optional[list] = None  # List of penalty names
     mechanics: Optional[dict] = None  # Enabled mechanics
+    game_defaults: Optional[dict] = None  # Game defaults (quarter_length, timeouts_per_half, play_clock, etc.)
+    onside_alt_distance: Optional[int] = 15  # Distance for 4th & X onside kick alternative
+    four_point_fg_enabled: Optional[bool] = False  # Whether 4-point field goals are enabled
+    four_point_fg_distance: Optional[int] = 50  # Minimum distance for 4-point field goal
 
 
 class LeagueCreate(LeagueBase):
@@ -81,6 +85,10 @@ class LeagueUpdate(BaseModel):
     game_unit_label_3: Optional[str] = None
     penalties: Optional[list] = None
     mechanics: Optional[dict] = None
+    game_defaults: Optional[dict] = None
+    onside_alt_distance: Optional[int] = None
+    four_point_fg_enabled: Optional[bool] = None
+    four_point_fg_distance: Optional[int] = None
 
 
 class League(LeagueBase):
@@ -90,6 +98,7 @@ class League(LeagueBase):
     groups: Optional[str] = None  # Stored as JSON string in DB
     penalties: Optional[str] = None  # Stored as JSON string in DB
     mechanics: Optional[str] = None  # Stored as JSON string in DB
+    game_defaults: Optional[str] = None  # Stored as JSON string in DB
     is_finished: bool = False
     created_at: datetime
     updated_at: datetime
@@ -101,6 +110,7 @@ class League(LeagueBase):
 # Season Schemas
 class SeasonBase(BaseModel):
     name: str  # e.g., "2025-26", "Spring 2025"
+    phase: Optional[str] = "regular"  # preseason, regular, playoffs, offseason
 
 
 class SeasonCreate(SeasonBase):
@@ -109,6 +119,7 @@ class SeasonCreate(SeasonBase):
 
 class SeasonUpdate(BaseModel):
     name: Optional[str] = None
+    phase: Optional[str] = None  # preseason, regular, playoffs, offseason
     is_current: Optional[bool] = None
     is_finished: Optional[bool] = None
 
@@ -116,6 +127,7 @@ class SeasonUpdate(BaseModel):
 class Season(SeasonBase):
     id: str
     league_id: str
+    phase: str
     is_current: bool
     is_finished: bool
     created_at: datetime
@@ -132,6 +144,16 @@ class TeamSeasonStatsBase(BaseModel):
     ties: int = 0
     points_for: int = 0
     points_against: int = 0
+    # Phase-specific records
+    preseason_wins: int = 0
+    preseason_losses: int = 0
+    preseason_ties: int = 0
+    regular_wins: int = 0
+    regular_losses: int = 0
+    regular_ties: int = 0
+    playoff_wins: int = 0
+    playoff_losses: int = 0
+    playoff_ties: int = 0
 
 
 class TeamSeasonStats(TeamSeasonStatsBase):
@@ -235,6 +257,22 @@ class TeamUpdate(BaseModel):
     ties: Optional[int] = None
     points_for: Optional[int] = None
     points_against: Optional[int] = None
+    home_wins: Optional[int] = None
+    home_losses: Optional[int] = None
+    home_ties: Optional[int] = None
+    away_wins: Optional[int] = None
+    away_losses: Optional[int] = None
+    away_ties: Optional[int] = None
+    preseason_wins: Optional[int] = None
+    preseason_losses: Optional[int] = None
+    preseason_ties: Optional[int] = None
+    regular_wins: Optional[int] = None
+    regular_losses: Optional[int] = None
+    regular_ties: Optional[int] = None
+    playoff_wins: Optional[int] = None
+    playoff_losses: Optional[int] = None
+    playoff_ties: Optional[int] = None
+    trophies: Optional[dict] = None
 
 
 class Team(TeamBase):
@@ -245,6 +283,22 @@ class Team(TeamBase):
     ties: int
     points_for: int
     points_against: int
+    home_wins: int = 0
+    home_losses: int = 0
+    home_ties: int = 0
+    away_wins: int = 0
+    away_losses: int = 0
+    away_ties: int = 0
+    preseason_wins: int = 0
+    preseason_losses: int = 0
+    preseason_ties: int = 0
+    regular_wins: int = 0
+    regular_losses: int = 0
+    regular_ties: int = 0
+    playoff_wins: int = 0
+    playoff_losses: int = 0
+    playoff_ties: int = 0
+    trophies: Optional[str] = None  # JSON string
     created_at: datetime
 
     class Config:
@@ -257,8 +311,8 @@ class LeagueWithTeams(League):
 
 # Game Schemas
 class GameBase(BaseModel):
-    home_team_id: str
-    away_team_id: str
+    home_team_id: Optional[str] = None  # Null = TBD
+    away_team_id: Optional[str] = None  # Null = TBD
     scheduled_at: Optional[datetime] = None
     time_tbd: Optional[bool] = False  # True if time is TBD (only date is set)
     game_unit: Optional[int] = None  # e.g., 1 for "Week 1"
@@ -297,14 +351,15 @@ class GameUpdate(BaseModel):
     timer_started_at: Optional[datetime] = None
     timer_started_seconds: Optional[int] = None
     display_state: Optional[str] = None
+    notification: Optional[dict] = None  # Transient notification to broadcast to viewers
 
 
 class GameWithTeams(BaseModel):
     id: str
     league_id: str
     season_id: Optional[str] = None
-    home_team: Team
-    away_team: Team
+    home_team: Optional[Team] = None
+    away_team: Optional[Team] = None
     home_score: int
     away_score: int
     status: str
@@ -328,6 +383,9 @@ class GameWithTeams(BaseModel):
     timer_started_at: Optional[datetime] = None
     timer_started_seconds: Optional[int] = None
     display_state: Optional[str] = None
+    onside_alt_distance: Optional[int] = 15  # From league settings
+    four_point_fg_enabled: Optional[bool] = False  # From league settings
+    four_point_fg_distance: Optional[int] = 50  # From league settings
     created_at: datetime
     updated_at: datetime
 
@@ -493,6 +551,12 @@ class StandaloneGameCreate(BaseModel):
     scheduled_at: Optional[datetime] = None
     simple_mode: bool = False
     timer_enabled: bool = True
+    # Game settings
+    quarter_length: str = "15:00"
+    halftime_length: str = "20:00"
+    overtime_length: str = "10:00"
+    play_clock_duration: int = 40
+    timeouts_per_half: int = 3
 
 
 class StandaloneGameUpdate(BaseModel):
@@ -530,6 +594,15 @@ class StandaloneGameUpdate(BaseModel):
     timer_enabled: Optional[bool] = None
     timer_seconds: Optional[int] = None
     timer_running: Optional[bool] = None
+    timer_started_at: Optional[datetime] = None
+    timer_started_seconds: Optional[int] = None
+    notification: Optional[dict] = None  # Transient notification to broadcast to viewers
+    # Game settings
+    quarter_length: Optional[str] = None
+    halftime_length: Optional[str] = None
+    overtime_length: Optional[str] = None
+    play_clock_duration: Optional[int] = None
+    timeouts_per_half: Optional[int] = None
 
 
 class EmbeddedTeam(BaseModel):
@@ -569,6 +642,14 @@ class StandaloneGame(BaseModel):
     timer_enabled: bool = True
     timer_seconds: int = 0
     timer_running: bool = False
+    timer_started_at: Optional[datetime] = None
+    timer_started_seconds: Optional[int] = None
+    # Game settings
+    quarter_length: str = "15:00"
+    halftime_length: str = "20:00"
+    overtime_length: str = "10:00"
+    play_clock_duration: int = 40
+    timeouts_per_half: int = 3
     created_at: datetime
     updated_at: datetime
 
@@ -600,6 +681,64 @@ class InviteResponse(BaseModel):
     permission: str
     status: str
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# User Follow Schemas
+class UserFollowCreate(BaseModel):
+    league_id: Optional[str] = None
+    game_id: Optional[str] = None
+
+
+class UserFollow(BaseModel):
+    id: str
+    user_id: str
+    league_id: Optional[str] = None
+    game_id: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Push Subscription Schemas
+class PushSubscriptionCreate(BaseModel):
+    endpoint: str
+    p256dh: str
+    auth: str
+
+
+class PushSubscription(BaseModel):
+    id: str
+    user_id: Optional[str] = None
+    endpoint: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Notification Preferences Schemas
+class NotificationPreferencesUpdate(BaseModel):
+    notifications_enabled: Optional[bool] = None
+    game_start: Optional[bool] = None
+    game_end: Optional[bool] = None
+    score_updates: Optional[bool] = None
+    quarter_end: Optional[bool] = None
+
+
+class NotificationPreferences(BaseModel):
+    id: str
+    user_id: str
+    notifications_enabled: bool = True
+    game_start: bool = True
+    game_end: bool = True
+    score_updates: bool = False
+    quarter_end: bool = False
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

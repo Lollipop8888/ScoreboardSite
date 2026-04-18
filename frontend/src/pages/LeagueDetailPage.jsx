@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -22,7 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, inviteApi } from '@/lib/api'
+import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, inviteApi, followApi, notificationApi, createWebSocket } from '@/lib/api'
+import { requestNotificationPermission, subscribeToPush } from '@/lib/notifications'
+import { Bell, BellOff } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { QRCodeSVG } from 'qrcode.react'
 import { HelpButton, FirstTimeTutorial } from '@/components/HelpTips'
@@ -104,6 +107,7 @@ export default function LeagueDetailPage() {
   const [newSeasonName, setNewSeasonName] = useState('')
   const [recordTypes, setRecordTypes] = useState([])
   const [selectedRecordType, setSelectedRecordType] = useState(null) // null = main/Overall
+  const [selectedPhaseFilter, setSelectedPhaseFilter] = useState('overall') // 'overall', 'preseason', 'regular', 'playoffs'
   const [newRecordTypeName, setNewRecordTypeName] = useState('')
   const [settingsTab, setSettingsTab] = useState('general')
   const [penaltiesDialogOpen, setPenaltiesDialogOpen] = useState(false)
@@ -117,6 +121,8 @@ export default function LeagueDetailPage() {
   const [invitePermission, setInvitePermission] = useState('view')
   const [inviteError, setInviteError] = useState('')
   const [inviteSuccess, setInviteSuccess] = useState('')
+  const [isFollowing, setIsFollowing] = useState(false)
+  const [followLoading, setFollowLoading] = useState(false)
   
   // Form states
   const [teamForm, setTeamForm] = useState({ name: '', location: '', abbreviation: '', group_1: '', group_2: '', color: '#3B82F6', color2: '', color3: '' })
@@ -144,6 +150,24 @@ export default function LeagueDetailPage() {
   useEffect(() => {
     loadData()
   }, [leagueId])
+
+  // WebSocket for real-time game updates
+  useEffect(() => {
+    if (!league?.share_code) return
+
+    const ws = createWebSocket('league', league.share_code, (message) => {
+      if (message.type === 'game_update') {
+        // Update the game in the games list
+        setGames(prevGames => prevGames.map(g => 
+          g.id === message.data.id 
+            ? { ...g, ...message.data }
+            : g
+        ))
+      }
+    })
+
+    return () => ws.close()
+  }, [league?.share_code])
 
   async function loadData() {
     try {
@@ -178,6 +202,17 @@ export default function LeagueDetailPage() {
         setSeasons([])
         setCurrentSeason(null)
         setRecordTypes([])
+      }
+      
+      // Check if user is following this league
+      if (user) {
+        try {
+          const follows = await followApi.getAll()
+          const isFollowingLeague = follows.some(f => f.league_id === leagueId)
+          setIsFollowing(isFollowingLeague)
+        } catch (err) {
+          console.error('Failed to check follow status:', err)
+        }
       }
     } catch (error) {
       console.error('Failed to load league:', error)
@@ -366,8 +401,8 @@ export default function LeagueDetailPage() {
       }
       
       const gameData = { 
-        home_team_id: gameForm.home_team_id,
-        away_team_id: gameForm.away_team_id,
+        home_team_id: gameForm.home_team_id || null,  // Empty = TBD
+        away_team_id: gameForm.away_team_id || null,  // Empty = TBD
         league_id: leagueId,
         scheduled_at: scheduledAtISO,
         time_tbd: gameForm.scheduled_date ? timeTbd : false,
@@ -436,8 +471,8 @@ export default function LeagueDetailPage() {
         }
       }
       await gameApi.update(editingGame.id, {
-        home_team_id: gameEditForm.home_team_id,
-        away_team_id: gameEditForm.away_team_id,
+        home_team_id: gameEditForm.home_team_id || null,  // Empty string = TBD (null)
+        away_team_id: gameEditForm.away_team_id || null,  // Empty string = TBD (null)
         scheduled_at: scheduledAtISO,
         time_tbd: gameEditForm.scheduled_date ? timeTbd : false,
         game_unit: gameEditForm.game_unit ? parseInt(gameEditForm.game_unit) : null,
@@ -583,17 +618,63 @@ export default function LeagueDetailPage() {
               </span>
             )}
           </div>
-          <p className="text-slate-600 dark:text-slate-400">{league.season}</p>
+          <p className="text-slate-600 dark:text-slate-400">
+            {currentSeason ? (
+              <>
+                {currentSeason.name} - {
+                  currentSeason.phase === 'preseason' ? 'Preseason' :
+                  currentSeason.phase === 'playoffs' ? 'Playoffs' :
+                  currentSeason.phase === 'offseason' ? 'Offseason' :
+                  'Regular Season'
+                }
+              </>
+            ) : (
+              league.season || 'No active season'
+            )}
+          </p>
         </div>
-        <Button
-          variant="outline"
-          className="gap-2"
-          onClick={() => openShareDialog('league', league.share_code, league.name)}
-          data-tutorial="share-button"
-        >
-          <Share2 className="h-4 w-4" />
-          Share League
-        </Button>
+        <div className="flex items-center gap-2">
+          {user && (
+            <Button
+              variant={isFollowing ? "default" : "outline"}
+              className={`gap-2 ${isFollowing ? 'bg-amber-500 hover:bg-amber-600' : ''}`}
+              onClick={async () => {
+                setFollowLoading(true)
+                try {
+                  if (isFollowing) {
+                    await followApi.unfollowLeague(leagueId)
+                    setIsFollowing(false)
+                  } else {
+                    // Request notification permission and subscribe to push
+                    const hasPermission = await requestNotificationPermission()
+                    if (hasPermission) {
+                      await subscribeToPush()
+                    }
+                    await followApi.followLeague(leagueId)
+                    setIsFollowing(true)
+                  }
+                } catch (err) {
+                  console.error('Failed to toggle follow:', err)
+                } finally {
+                  setFollowLoading(false)
+                }
+              }}
+              disabled={followLoading}
+            >
+              {isFollowing ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+              {isFollowing ? 'Following' : 'Follow'}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={() => openShareDialog('league', league.share_code, league.name)}
+            data-tutorial="share-button"
+          >
+            <Share2 className="h-4 w-4" />
+            Share League
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="standings" className="space-y-4">
@@ -623,9 +704,23 @@ export default function LeagueDetailPage() {
         {/* Standings Tab */}
         <TabsContent value="standings">
           <Card>
-            <CardHeader>
-              <CardTitle>League Standings</CardTitle>
-              <CardDescription>Current rankings based on wins and losses</CardDescription>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>League Standings</CardTitle>
+                <CardDescription>Current rankings based on wins and losses</CardDescription>
+              </div>
+              {/* Phase Filter */}
+              <Select value={selectedPhaseFilter} onValueChange={setSelectedPhaseFilter}>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue placeholder="Phase" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="overall">Overall</SelectItem>
+                  <SelectItem value="preseason">Preseason</SelectItem>
+                  <SelectItem value="regular">Regular Season</SelectItem>
+                  <SelectItem value="playoffs">Playoffs</SelectItem>
+                </SelectContent>
+              </Select>
             </CardHeader>
             <CardContent>
               {standings.length === 0 ? (
@@ -645,6 +740,8 @@ export default function LeagueDetailPage() {
                         <th className="pb-3 pr-4 text-center">L</th>
                         <th className="pb-3 pr-4 text-center">T</th>
                         <th className="pb-3 pr-4 text-center">PCT</th>
+                        <th className="pb-3 pr-4 text-center">Home</th>
+                        <th className="pb-3 pr-4 text-center">Away</th>
                         {league?.has_groups && <th className="pb-3 pr-4 text-center">{league.group_label_2 || 'Div'} Rank</th>}
                         <th className="pb-3 pr-4 text-center">PF</th>
                         <th className="pb-3 pr-4 text-center">PA</th>
@@ -653,76 +750,281 @@ export default function LeagueDetailPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {standings.map((team, index) => (
-                        <tr key={team.id} className="border-b last:border-0">
-                          <td className="py-3 pr-4 font-medium">{index + 1}</td>
-                          <td className="py-3 pr-4">
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="h-4 w-4 rounded-full"
-                                style={{ backgroundColor: team.color }}
-                              />
-                              <span className="font-medium">{team.name}</span>
-                              {team.abbreviation && (
-                                <span className="text-slate-400">({team.abbreviation})</span>
+                      {(() => {
+                        // Get record stats for each team based on selected phase and record type
+                        const getTeamRecord = (team) => {
+                          // First apply phase filter
+                          let wins, losses, ties
+                          if (selectedPhaseFilter === 'preseason') {
+                            wins = team.preseason_wins || 0
+                            losses = team.preseason_losses || 0
+                            ties = team.preseason_ties || 0
+                          } else if (selectedPhaseFilter === 'regular') {
+                            wins = team.regular_wins || 0
+                            losses = team.regular_losses || 0
+                            ties = team.regular_ties || 0
+                          } else if (selectedPhaseFilter === 'playoffs') {
+                            wins = team.playoff_wins || 0
+                            losses = team.playoff_losses || 0
+                            ties = team.playoff_ties || 0
+                          } else {
+                            // Overall - use main stats or record type
+                            if (!selectedRecordType) {
+                              return { wins: team.wins || 0, losses: team.losses || 0, ties: team.ties || 0, points_for: team.points_for || 0, points_against: team.points_against || 0 }
+                            }
+                            // Find the specific record type
+                            const record = team.records?.find(r => r.record_type_id === selectedRecordType)
+                            if (record) {
+                              return { wins: record.wins || 0, losses: record.losses || 0, ties: record.ties || 0, points_for: record.points_for || 0, points_against: record.points_against || 0 }
+                            }
+                            return { wins: 0, losses: 0, ties: 0, points_for: 0, points_against: 0 }
+                          }
+                          // Phase-specific records don't have points_for/against tracked separately
+                          return { wins, losses, ties, points_for: team.points_for || 0, points_against: team.points_against || 0 }
+                        }
+                        
+                        // Sort standings based on selected record type
+                        const sortedStandings = [...standings].sort((a, b) => {
+                          const aRec = getTeamRecord(a)
+                          const bRec = getTeamRecord(b)
+                          // Sort by wins desc, losses asc, point diff desc
+                          if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins
+                          if (aRec.losses !== bRec.losses) return aRec.losses - bRec.losses
+                          return (bRec.points_for - bRec.points_against) - (aRec.points_for - aRec.points_against)
+                        })
+                        
+                        return sortedStandings.map((team, index) => {
+                          const rec = getTeamRecord(team)
+                          return (
+                            <tr key={team.id} className="border-b last:border-0">
+                              <td className="py-3 pr-4 font-medium">{index + 1}</td>
+                              <td className="py-3 pr-4">
+                                <div className="flex items-center gap-2">
+                                  {team.logo_url ? (
+                                    <img src={team.logo_url} alt="" className="h-5 w-5 object-contain" />
+                                  ) : (
+                                    <div
+                                      className="h-4 w-4 rounded-full"
+                                      style={{ backgroundColor: team.color }}
+                                    />
+                                  )}
+                                  <span className="font-medium">{team.name}</span>
+                                  {team.abbreviation && (
+                                    <span className="text-slate-400">({team.abbreviation})</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-3 pr-4 text-center font-semibold text-green-600">{rec.wins}</td>
+                              <td className="py-3 pr-4 text-center font-semibold text-red-600">{rec.losses}</td>
+                              <td className="py-3 pr-4 text-center text-slate-500">{rec.ties}</td>
+                              <td className="py-3 pr-4 text-center font-semibold text-blue-600">
+                                {(() => {
+                                  const totalGames = rec.wins + rec.losses + rec.ties
+                                  if (totalGames === 0) return '—'
+                                  const winPct = (rec.wins + rec.ties * 0.5) / totalGames
+                                  return (winPct * 100).toFixed(0) + '%'
+                                })()}
+                              </td>
+                              {/* Home Record */}
+                              <td className="py-3 pr-4 text-center text-sm">
+                                <span className="text-green-600">{team.home_wins || 0}</span>
+                                <span className="text-slate-400">-</span>
+                                <span className="text-red-600">{team.home_losses || 0}</span>
+                                {(team.home_ties || 0) > 0 && <><span className="text-slate-400">-</span><span className="text-slate-500">{team.home_ties}</span></>}
+                              </td>
+                              {/* Away Record */}
+                              <td className="py-3 pr-4 text-center text-sm">
+                                <span className="text-green-600">{team.away_wins || 0}</span>
+                                <span className="text-slate-400">-</span>
+                                <span className="text-red-600">{team.away_losses || 0}</span>
+                                {(team.away_ties || 0) > 0 && <><span className="text-slate-400">-</span><span className="text-slate-500">{team.away_ties}</span></>}
+                              </td>
+                              {/* Division Rank */}
+                              {league?.has_groups && (
+                                <td className="py-3 pr-4 text-center">
+                                  {team.group_1 && team.group_2 ? (
+                                    <span className="text-purple-600 font-medium">
+                                      {(() => {
+                                        const divTeams = sortedStandings.filter(t => t.group_1 === team.group_1 && t.group_2 === team.group_2)
+                                        const sorted = [...divTeams].sort((a, b) => {
+                                          const aRec = getTeamRecord(a)
+                                          const bRec = getTeamRecord(b)
+                                          const aTotal = aRec.wins + aRec.losses + aRec.ties
+                                          const bTotal = bRec.wins + bRec.losses + bRec.ties
+                                          const aWinPct = aTotal > 0 ? (aRec.wins + aRec.ties * 0.5) / aTotal : 0
+                                          const bWinPct = bTotal > 0 ? (bRec.wins + bRec.ties * 0.5) / bTotal : 0
+                                          if (bWinPct !== aWinPct) return bWinPct - aWinPct
+                                          return bRec.wins - aRec.wins
+                                        })
+                                        const rank = sorted.findIndex(t => t.id === team.id) + 1
+                                        return `#${rank} ${team.group_1} ${team.group_2}`
+                                      })()}
+                                    </span>
+                                  ) : '—'}
+                                </td>
                               )}
-                            </div>
-                          </td>
-                          <td className="py-3 pr-4 text-center font-semibold text-green-600">{team.wins}</td>
-                          <td className="py-3 pr-4 text-center font-semibold text-red-600">{team.losses}</td>
-                          <td className="py-3 pr-4 text-center text-slate-500">{team.ties}</td>
-                          <td className="py-3 pr-4 text-center font-semibold text-blue-600">
-                            {(() => {
-                              const totalGames = (team.wins || 0) + (team.losses || 0) + (team.ties || 0)
-                              if (totalGames === 0) return '—'
-                              const winPct = ((team.wins || 0) + (team.ties || 0) * 0.5) / totalGames
-                              return (winPct * 100).toFixed(0) + '%'
-                            })()}
-                          </td>
-                          {/* Division Rank */}
-                          {league?.has_groups && (
-                            <td className="py-3 pr-4 text-center">
-                              {team.group_1 && team.group_2 ? (
-                                <span className="text-purple-600 font-medium">
-                                  {(() => {
-                                    const divTeams = standings.filter(t => t.group_1 === team.group_1 && t.group_2 === team.group_2)
-                                    const sorted = [...divTeams].sort((a, b) => {
-                                      const aTotal = (a.wins || 0) + (a.losses || 0) + (a.ties || 0)
-                                      const bTotal = (b.wins || 0) + (b.losses || 0) + (b.ties || 0)
-                                      const aWinPct = aTotal > 0 ? ((a.wins || 0) + (a.ties || 0) * 0.5) / aTotal : 0
-                                      const bWinPct = bTotal > 0 ? ((b.wins || 0) + (b.ties || 0) * 0.5) / bTotal : 0
-                                      if (bWinPct !== aWinPct) return bWinPct - aWinPct
-                                      return (b.wins || 0) - (a.wins || 0)
-                                    })
-                                    const rank = sorted.findIndex(t => t.id === team.id) + 1
-                                    return `#${rank} ${team.group_1} ${team.group_2}`
-                                  })()}
+                              <td className="py-3 pr-4 text-center">{rec.points_for}</td>
+                              <td className="py-3 pr-4 text-center">{rec.points_against}</td>
+                              <td className="py-3 pr-4 text-center">
+                                <span className={rec.points_for - rec.points_against >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                  {rec.points_for - rec.points_against >= 0 ? '+' : ''}{rec.points_for - rec.points_against}
                                 </span>
-                              ) : '—'}
-                            </td>
-                          )}
-                          <td className="py-3 pr-4 text-center">{team.points_for}</td>
-                          <td className="py-3 pr-4 text-center">{team.points_against}</td>
-                          <td className="py-3 pr-4 text-center">
-                            <span className={team.points_for - team.points_against >= 0 ? 'text-green-600' : 'text-red-600'}>
-                              {team.points_for - team.points_against >= 0 ? '+' : ''}{team.points_for - team.points_against}
-                            </span>
-                          </td>
-                          <td className="py-3 text-center">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => openStatsEditDialog(team)}
-                              className="h-8 w-8 text-slate-400 hover:text-blue-600"
-                              disabled={league.is_finished}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
+                              </td>
+                              <td className="py-3 text-center">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => openStatsEditDialog(team)}
+                                  className="h-8 w-8 text-slate-400 hover:text-blue-600"
+                                  disabled={league.is_finished}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              </td>
+                            </tr>
+                          )
+                        })
+                      })()}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Trophies & Awards Section */}
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-yellow-500" />
+                Trophies & Awards
+              </CardTitle>
+              <CardDescription>Track championships, division titles, and other achievements</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {standings.length === 0 ? (
+                <p className="text-slate-500 text-center py-4">Add teams to track trophies</p>
+              ) : (
+                <div className="space-y-4">
+                  {standings.map(team => {
+                    const trophies = team.trophies ? (typeof team.trophies === 'string' ? JSON.parse(team.trophies) : team.trophies) : {}
+                    const hasTrophies = Object.keys(trophies).length > 0 && Object.values(trophies).some(v => v > 0)
+                    return (
+                      <div key={team.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <div className="flex items-center gap-3">
+                          {team.logo_url ? (
+                            <img src={team.logo_url} alt="" className="h-8 w-8 object-contain" />
+                          ) : (
+                            <div className="h-8 w-8 rounded-full" style={{ backgroundColor: team.color }} />
+                          )}
+                          <span className="font-medium">{team.name}</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          {hasTrophies ? (
+                            <div className="flex items-center gap-3 text-sm">
+                              {trophies.championships > 0 && (
+                                <span className="flex items-center gap-1 text-yellow-600">
+                                  <Trophy className="h-4 w-4" /> {trophies.championships}
+                                </span>
+                              )}
+                              {trophies.division_titles > 0 && (
+                                <span className="flex items-center gap-1 text-blue-600">
+                                  🏅 {trophies.division_titles}
+                                </span>
+                              )}
+                              {trophies.conference_titles > 0 && (
+                                <span className="flex items-center gap-1 text-purple-600">
+                                  🎖️ {trophies.conference_titles}
+                                </span>
+                              )}
+                              {trophies.mvps > 0 && (
+                                <span className="flex items-center gap-1 text-green-600">
+                                  ⭐ {trophies.mvps}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-sm">No trophies yet</span>
+                          )}
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button variant="outline" size="sm" disabled={league.is_finished}>
+                                Edit
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Edit Trophies - {team.name}</DialogTitle>
+                                <DialogDescription>Update trophy counts for this team</DialogDescription>
+                              </DialogHeader>
+                              <div className="grid gap-4 py-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <Label>🏆 Championships</Label>
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      defaultValue={trophies.championships || 0}
+                                      id={`trophy-champ-${team.id}`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label>🏅 Division Titles</Label>
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      defaultValue={trophies.division_titles || 0}
+                                      id={`trophy-div-${team.id}`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label>🎖️ Conference Titles</Label>
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      defaultValue={trophies.conference_titles || 0}
+                                      id={`trophy-conf-${team.id}`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label>⭐ MVPs</Label>
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      defaultValue={trophies.mvps || 0}
+                                      id={`trophy-mvp-${team.id}`}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                              <DialogFooter>
+                                <DialogClose asChild>
+                                  <Button
+                                    onClick={async () => {
+                                      const newTrophies = {
+                                        championships: parseInt(document.getElementById(`trophy-champ-${team.id}`).value) || 0,
+                                        division_titles: parseInt(document.getElementById(`trophy-div-${team.id}`).value) || 0,
+                                        conference_titles: parseInt(document.getElementById(`trophy-conf-${team.id}`).value) || 0,
+                                        mvps: parseInt(document.getElementById(`trophy-mvp-${team.id}`).value) || 0
+                                      }
+                                      try {
+                                        await teamApi.update(team.id, { trophies: newTrophies })
+                                        loadData()
+                                      } catch (error) {
+                                        console.error('Failed to update trophies:', error)
+                                      }
+                                    }}
+                                  >
+                                    Save Trophies
+                                  </Button>
+                                </DialogClose>
+                              </DialogFooter>
+                            </DialogContent>
+                          </Dialog>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </CardContent>
@@ -1258,13 +1560,14 @@ export default function LeagueDetailPage() {
                       <div className="grid gap-2">
                         <Label>Home Team</Label>
                         <Select
-                          value={gameForm.home_team_id}
-                          onValueChange={(value) => setGameForm({ ...gameForm, home_team_id: value })}
+                          value={gameForm.home_team_id || 'tbd'}
+                          onValueChange={(value) => setGameForm({ ...gameForm, home_team_id: value === 'tbd' ? '' : value })}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select home team" />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="tbd">TBD</SelectItem>
                             {league.teams?.map((team) => (
                               <SelectItem key={team.id} value={team.id}>
                                 {team.name}
@@ -1276,13 +1579,14 @@ export default function LeagueDetailPage() {
                       <div className="grid gap-2">
                         <Label>Away Team</Label>
                         <Select
-                          value={gameForm.away_team_id}
-                          onValueChange={(value) => setGameForm({ ...gameForm, away_team_id: value })}
+                          value={gameForm.away_team_id || 'tbd'}
+                          onValueChange={(value) => setGameForm({ ...gameForm, away_team_id: value === 'tbd' ? '' : value })}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select away team" />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="tbd">TBD</SelectItem>
                             {league.teams?.filter(t => t.id !== gameForm.home_team_id).map((team) => (
                               <SelectItem key={team.id} value={team.id}>
                                 {team.name}
@@ -1350,7 +1654,7 @@ export default function LeagueDetailPage() {
                       )}
                     </div>
                     <DialogFooter>
-                      <Button type="submit" disabled={!gameForm.home_team_id || !gameForm.away_team_id}>
+                      <Button type="submit">
                         Create Game
                       </Button>
                     </DialogFooter>
@@ -1392,6 +1696,56 @@ export default function LeagueDetailPage() {
                   Completed ({games.filter(g => g.status === 'final' || g.quarter === 'Final').length})
                 </button>
               </div>
+
+              {/* Current Week Indicator */}
+              {(() => {
+                // Determine current week from live games or next scheduled game
+                const hasUnitLabel = league.game_unit_label || league.game_unit_label_2 || league.game_unit_label_3
+                if (!hasUnitLabel) return null
+                
+                const liveGames = games.filter(g => g.status === 'live')
+                const scheduledGames = games.filter(g => g.status === 'scheduled').sort((a, b) => {
+                  if (!a.scheduled_at) return 1
+                  if (!b.scheduled_at) return -1
+                  return new Date(a.scheduled_at) - new Date(b.scheduled_at)
+                })
+                
+                // Current week is from live games, or the next scheduled game
+                let currentWeek = null
+                let currentWeekType = 1
+                
+                if (liveGames.length > 0 && liveGames[0].game_unit) {
+                  currentWeek = liveGames[0].game_unit
+                  currentWeekType = liveGames[0].game_unit_type || 1
+                } else if (scheduledGames.length > 0 && scheduledGames[0].game_unit) {
+                  currentWeek = scheduledGames[0].game_unit
+                  currentWeekType = scheduledGames[0].game_unit_type || 1
+                }
+                
+                if (!currentWeek) return null
+                
+                const unitLabel = currentWeekType === 2 && league.game_unit_label_2 
+                  ? league.game_unit_label_2 
+                  : currentWeekType === 3 && league.game_unit_label_3 
+                    ? league.game_unit_label_3 
+                    : league.game_unit_label || 'Week'
+                
+                return (
+                  <div className="mb-4 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
+                    <div className="flex items-center justify-center gap-2">
+                      <span className="text-2xl">📅</span>
+                      <span className="text-lg font-bold text-blue-700 dark:text-blue-300">
+                        Current: {unitLabel} {currentWeek}
+                      </span>
+                      {liveGames.length > 0 && (
+                        <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-bold rounded-full animate-pulse">
+                          LIVE
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
 
               {(() => {
                 const filteredGames = games.filter(game => {
@@ -1477,18 +1831,26 @@ export default function LeagueDetailPage() {
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2">
-                          <div
-                            className="h-4 w-4 rounded-full"
-                            style={{ backgroundColor: game.away_team?.color || '#888' }}
-                          />
+                          {game.away_team?.logo_url ? (
+                            <img src={game.away_team.logo_url} alt="" className="h-5 w-5 object-contain" />
+                          ) : (
+                            <div
+                              className="h-4 w-4 rounded-full"
+                              style={{ backgroundColor: game.away_team?.color || '#888' }}
+                            />
+                          )}
                           <span className="font-medium">{game.away_team?.name || 'TBD'}</span>
                         </div>
                         <span className="text-slate-400">@</span>
                         <div className="flex items-center gap-2">
-                          <div
-                            className="h-4 w-4 rounded-full"
-                            style={{ backgroundColor: game.home_team?.color || '#888' }}
-                          />
+                          {game.home_team?.logo_url ? (
+                            <img src={game.home_team.logo_url} alt="" className="h-5 w-5 object-contain" />
+                          ) : (
+                            <div
+                              className="h-4 w-4 rounded-full"
+                              style={{ backgroundColor: game.home_team?.color || '#888' }}
+                            />
+                          )}
                           <span className="font-medium">{game.home_team?.name || 'TBD'}</span>
                         </div>
                       </div>
@@ -1807,6 +2169,16 @@ export default function LeagueDetailPage() {
               General
             </button>
             <button
+              onClick={() => setSettingsTab('gameDefaults')}
+              className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                settingsTab === 'gameDefaults'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              Game Defaults
+            </button>
+            <button
               onClick={() => setSettingsTab('mechanics')}
               className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
                 settingsTab === 'mechanics'
@@ -1832,6 +2204,7 @@ export default function LeagueDetailPage() {
                   <Label htmlFor="league-name">League Name</Label>
                   <Input
                     id="league-name"
+                    key={`name-${league.name}`}
                     defaultValue={league.name}
                     onBlur={async (e) => {
                       if (e.target.value && e.target.value !== league.name) {
@@ -1850,6 +2223,7 @@ export default function LeagueDetailPage() {
                   <Label htmlFor="league-season">Season</Label>
                   <Input
                     id="league-season"
+                    key={`season-${league.season}`}
                     defaultValue={league.season}
                     onBlur={async (e) => {
                       if (e.target.value && e.target.value !== league.season) {
@@ -1915,6 +2289,132 @@ export default function LeagueDetailPage() {
                   month: 'long', 
                   day: 'numeric' 
                 })}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Season State Card */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Season State</CardTitle>
+              <CardDescription>Track the current phase of your season</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Current Season Phase */}
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">Current Phase</Label>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {(() => {
+                    const currentPhase = currentSeason?.phase || 'regular'
+                    const phases = [
+                      { id: 'preseason', label: 'Preseason', icon: '🏋️', selectedClass: 'bg-blue-100 dark:bg-blue-900/50 border-blue-400 text-blue-700 dark:text-blue-300' },
+                      { id: 'regular', label: 'Regular Season', icon: '🏈', selectedClass: 'bg-green-100 dark:bg-green-900/50 border-green-400 text-green-700 dark:text-green-300' },
+                      { id: 'playoffs', label: 'Playoffs', icon: '🏆', selectedClass: 'bg-amber-100 dark:bg-amber-900/50 border-amber-400 text-amber-700 dark:text-amber-300' },
+                      { id: 'offseason', label: 'Offseason', icon: '🌴', selectedClass: 'bg-slate-200 dark:bg-slate-700 border-slate-400 text-slate-700 dark:text-slate-300' },
+                    ]
+                    return phases.map(phase => (
+                      <Button
+                        key={phase.id}
+                        variant="outline"
+                        className={`h-auto py-3 flex-col gap-1 ${currentPhase === phase.id ? phase.selectedClass + ' border-2' : ''}`}
+                        onClick={async () => {
+                          if (!currentSeason) {
+                            alert('No active season. Please create a season first.')
+                            return
+                          }
+                          try {
+                            await seasonApi.update(currentSeason.id, { phase: phase.id })
+                            loadData()
+                          } catch (error) {
+                            console.error('Failed to update season phase:', error)
+                          }
+                        }}
+                        disabled={league.is_finished || !currentSeason}
+                      >
+                        <span className="text-xl">{phase.icon}</span>
+                        <span className="text-xs font-medium">{phase.label}</span>
+                      </Button>
+                    ))
+                  })()}
+                </div>
+              </div>
+
+
+              {/* Phase Record Tracking Settings */}
+              <div className="space-y-3 pt-4 border-t">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-medium">Track Records By Phase</Label>
+                  <p className="text-xs text-slate-500">Choose which phases count towards team records</p>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {(() => {
+                    const defaults = league.game_defaults ? (typeof league.game_defaults === 'string' ? JSON.parse(league.game_defaults) : league.game_defaults) : {}
+                    const phaseRecords = defaults.phase_records || { preseason: false, regular: true, playoffs: true, offseason: false }
+                    const phases = [
+                      { id: 'preseason', label: 'Preseason', defaultOn: false },
+                      { id: 'regular', label: 'Regular', defaultOn: true },
+                      { id: 'playoffs', label: 'Playoffs', defaultOn: true },
+                      { id: 'offseason', label: 'Offseason', defaultOn: false },
+                    ]
+                    return phases.map(phase => {
+                      const isOn = phaseRecords[phase.id] ?? phase.defaultOn
+                      return (
+                        <Button
+                          key={phase.id}
+                          variant="outline"
+                          size="sm"
+                          className={`justify-between ${isOn ? 'bg-green-50 dark:bg-green-900/30 border-green-400 text-green-700 dark:text-green-300' : 'opacity-60'}`}
+                          onClick={async () => {
+                            const newPhaseRecords = { ...phaseRecords, [phase.id]: !isOn }
+                            const newDefaults = { ...defaults, phase_records: newPhaseRecords }
+                            try {
+                              await leagueApi.update(leagueId, { game_defaults: newDefaults })
+                              setLeague(prev => ({ ...prev, game_defaults: newDefaults }))
+                            } catch (error) {
+                              console.error('Failed to update phase records:', error)
+                            }
+                          }}
+                          disabled={league.is_finished}
+                        >
+                          <span>{phase.label}</span>
+                          <span>{isOn ? '✓' : '✗'}</span>
+                        </Button>
+                      )
+                    })
+                  })()}
+                </div>
+              </div>
+
+              {/* Season Status Display */}
+              <div className="pt-4 border-t">
+                <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    {(() => {
+                      const phase = currentSeason?.phase || 'regular'
+                      const phaseInfo = {
+                        preseason: { icon: '🏋️', label: 'Preseason' },
+                        regular: { icon: '🏈', label: 'Regular Season' },
+                        playoffs: { icon: '🏆', label: 'Playoffs' },
+                        offseason: { icon: '🌴', label: 'Offseason' },
+                      }[phase] || { icon: '🏈', label: 'Regular Season' }
+                      
+                      return (
+                        <>
+                          <span className="text-2xl">{phaseInfo.icon}</span>
+                          <div>
+                            <p className="font-medium">{currentSeason?.name || 'No Season'} - {phaseInfo.label}</p>
+                            <p className="text-xs text-slate-500">Current season state</p>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${league.is_finished ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300' : 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300'}`}>
+                      {league.is_finished ? 'Finished' : 'Active'}
+                    </span>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -2204,6 +2704,33 @@ export default function LeagueDetailPage() {
                     </Button>
                   )}
                 </div>
+                {/* Season Phase Selector */}
+                {currentSeason && !currentSeason.is_finished && (
+                  <div className="flex items-center gap-3 pt-2 border-t">
+                    <Label className="text-sm text-slate-600">Phase:</Label>
+                    <Select
+                      value={currentSeason.phase || 'regular'}
+                      onValueChange={async (value) => {
+                        try {
+                          await seasonApi.update(currentSeason.id, { phase: value })
+                          loadData()
+                        } catch (error) {
+                          console.error('Failed to update phase:', error)
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="w-[150px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="preseason">Preseason</SelectItem>
+                        <SelectItem value="regular">Regular Season</SelectItem>
+                        <SelectItem value="playoffs">Playoffs</SelectItem>
+                        <SelectItem value="offseason">Offseason</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               {/* New Season */}
@@ -2597,6 +3124,883 @@ export default function LeagueDetailPage() {
                   Delete League
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+          </>
+          )}
+
+          {settingsTab === 'gameDefaults' && (
+          <>
+          {/* Game Defaults Card */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Game Defaults</CardTitle>
+              <CardDescription>Default settings applied when creating new games in this league</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {(() => {
+                const defaults = league.game_defaults ? (typeof league.game_defaults === 'string' ? JSON.parse(league.game_defaults) : league.game_defaults) : {}
+                
+                const updateDefaults = async (key, value) => {
+                  const newDefaults = { ...defaults, [key]: value }
+                  try {
+                    await leagueApi.update(leagueId, { game_defaults: newDefaults })
+                    loadData()
+                  } catch (error) {
+                    console.error('Failed to update game defaults:', error)
+                  }
+                }
+                
+                return (
+                  <>
+                    {/* Time Settings */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Time Settings</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="num-quarters">Number of Quarters</Label>
+                          <Input
+                            id="num-quarters"
+                            type="number"
+                            min="1"
+                            max="8"
+                            value={defaults.num_quarters ?? 4}
+                            onChange={(e) => updateDefaults('num_quarters', parseInt(e.target.value) || 4)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="quarter-length">Quarter Length (min)</Label>
+                          <Input
+                            id="quarter-length"
+                            type="number"
+                            min="1"
+                            max="30"
+                            value={defaults.quarter_length ?? 15}
+                            onChange={(e) => updateDefaults('quarter_length', parseInt(e.target.value) || 15)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="halftime-length">Halftime Length (min)</Label>
+                          <Input
+                            id="halftime-length"
+                            type="number"
+                            min="1"
+                            max="30"
+                            value={defaults.halftime_length ?? 12}
+                            onChange={(e) => updateDefaults('halftime_length', parseInt(e.target.value) || 12)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="quarter-break">Quarter Break (sec)</Label>
+                          <Input
+                            id="quarter-break"
+                            type="number"
+                            min="0"
+                            max="300"
+                            value={defaults.quarter_break ?? 120}
+                            onChange={(e) => updateDefaults('quarter_break', parseInt(e.target.value) || 120)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Play Clock Settings */}
+                      <div className="mt-4">
+                        <Label className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-2 block">Play Clock Settings</Label>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="play-clock" className="text-xs">Standard Play Clock</Label>
+                            <Input
+                              id="play-clock"
+                              type="number"
+                              min="10"
+                              max="60"
+                              value={defaults.play_clock ?? 40}
+                              onChange={(e) => updateDefaults('play_clock', parseInt(e.target.value) || 40)}
+                              disabled={league.is_finished}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="play-clock-kickoff" className="text-xs">After Kickoff/Score</Label>
+                            <Input
+                              id="play-clock-kickoff"
+                              type="number"
+                              min="10"
+                              max="60"
+                              value={defaults.play_clock_kickoff ?? 25}
+                              onChange={(e) => updateDefaults('play_clock_kickoff', parseInt(e.target.value) || 25)}
+                              disabled={league.is_finished}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="play-clock-penalty" className="text-xs">After Penalty</Label>
+                            <Input
+                              id="play-clock-penalty"
+                              type="number"
+                              min="10"
+                              max="60"
+                              value={defaults.play_clock_penalty ?? 40}
+                              onChange={(e) => updateDefaults('play_clock_penalty', parseInt(e.target.value) || 40)}
+                              disabled={league.is_finished}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="play-clock-timeout" className="text-xs">After Timeout</Label>
+                            <Input
+                              id="play-clock-timeout"
+                              type="number"
+                              min="10"
+                              max="60"
+                              value={defaults.play_clock_timeout ?? 25}
+                              onChange={(e) => updateDefaults('play_clock_timeout', parseInt(e.target.value) || 25)}
+                              disabled={league.is_finished}
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          <Label htmlFor="play-clock-delay" className="text-xs">Start Delay After Play (seconds)</Label>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Delay before play clock starts counting down after a play ends</p>
+                          <Input
+                            id="play-clock-delay"
+                            type="number"
+                            min="0"
+                            max="10"
+                            value={defaults.play_clock_delay ?? 0}
+                            onChange={(e) => updateDefaults('play_clock_delay', parseInt(e.target.value) || 0)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Timeout Settings */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Timeout Settings</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="timeouts-per-half">Timeouts Per Half</Label>
+                          <Input
+                            id="timeouts-per-half"
+                            type="number"
+                            min="0"
+                            max="10"
+                            value={defaults.timeouts_per_half ?? 3}
+                            onChange={(e) => updateDefaults('timeouts_per_half', parseInt(e.target.value) || 3)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="timeout-length">Timeout Length (seconds)</Label>
+                          <Input
+                            id="timeout-length"
+                            type="number"
+                            min="30"
+                            max="180"
+                            value={defaults.timeout_length ?? 60}
+                            onChange={(e) => updateDefaults('timeout_length', parseInt(e.target.value) || 60)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Overtime Settings */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Overtime Settings</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="ot-length">OT Period Length (minutes)</Label>
+                          <Input
+                            id="ot-length"
+                            type="number"
+                            min="1"
+                            max="15"
+                            value={defaults.ot_length ?? 10}
+                            onChange={(e) => updateDefaults('ot_length', parseInt(e.target.value) || 10)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="ot-timeouts">OT Timeouts Per Team</Label>
+                          <Input
+                            id="ot-timeouts"
+                            type="number"
+                            min="0"
+                            max="5"
+                            value={defaults.ot_timeouts ?? 2}
+                            onChange={(e) => updateDefaults('ot_timeouts', parseInt(e.target.value) || 2)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Field Settings */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Field Settings</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="kickoff-yard">Kickoff Yard Line</Label>
+                          <Input
+                            id="kickoff-yard"
+                            type="number"
+                            min="20"
+                            max="50"
+                            value={defaults.kickoff_yard ?? 35}
+                            onChange={(e) => updateDefaults('kickoff_yard', parseInt(e.target.value) || 35)}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Special Rules */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Special Rules</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="onside-alt-distance">4th & X Alternative Distance</Label>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Distance for the 4th down onside kick alternative (shown in Q4 when trailing)</p>
+                          <Input
+                            id="onside-alt-distance"
+                            type="number"
+                            min="1"
+                            max="99"
+                            value={league.onside_alt_distance ?? 15}
+                            onChange={async (e) => {
+                              try {
+                                await leagueApi.update(leagueId, { onside_alt_distance: parseInt(e.target.value) || 15 })
+                                loadData()
+                              } catch (error) {
+                                console.error('Failed to update onside alt distance:', error)
+                              }
+                            }}
+                            disabled={league.is_finished}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <Label>4-Point Field Goals</Label>
+                              <p className="text-xs text-slate-500 dark:text-slate-400">Enable 4-point field goals for long kicks</p>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant={league.four_point_fg_enabled ? "default" : "outline"}
+                              className={league.four_point_fg_enabled ? "bg-green-600" : ""}
+                              onClick={async () => {
+                                try {
+                                  await leagueApi.update(leagueId, { four_point_fg_enabled: !league.four_point_fg_enabled })
+                                  loadData()
+                                } catch (error) {
+                                  console.error('Failed to update 4-point FG setting:', error)
+                                }
+                              }}
+                              disabled={league.is_finished}
+                            >
+                              {league.four_point_fg_enabled ? 'ON' : 'OFF'}
+                            </Button>
+                          </div>
+                          {league.four_point_fg_enabled && (
+                            <div className="mt-2">
+                              <Label htmlFor="four-point-fg-distance">Minimum Distance (yards)</Label>
+                              <p className="text-xs text-slate-500 dark:text-slate-400">Field goals from this distance or longer are worth 4 points</p>
+                              <Input
+                                id="four-point-fg-distance"
+                                type="number"
+                                min="30"
+                                max="70"
+                                value={league.four_point_fg_distance ?? 50}
+                                onChange={async (e) => {
+                                  try {
+                                    await leagueApi.update(leagueId, { four_point_fg_distance: parseInt(e.target.value) || 50 })
+                                    loadData()
+                                  } catch (error) {
+                                    console.error('Failed to update 4-point FG distance:', error)
+                                  }
+                                }}
+                                disabled={league.is_finished}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Broadcast Features */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Broadcast Features</h4>
+                      <p className="text-sm text-slate-500 mb-3">Toggle features available during game broadcasts</p>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Ad Breaks</Label>
+                            <p className="text-xs text-slate-500">Show ad break prompts after scores</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_ad_breaks !== false ? "default" : "outline"}
+                            className={defaults.enable_ad_breaks !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_ad_breaks', defaults.enable_ad_breaks === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_ad_breaks !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Play Clock</Label>
+                            <p className="text-xs text-slate-500">Show play clock during games</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_play_clock !== false ? "default" : "outline"}
+                            className={defaults.enable_play_clock !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_play_clock', defaults.enable_play_clock === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_play_clock !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Timeout Tracking</Label>
+                            <p className="text-xs text-slate-500">Track and display team timeouts</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_timeouts !== false ? "default" : "outline"}
+                            className={defaults.enable_timeouts !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_timeouts', defaults.enable_timeouts === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_timeouts !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Quick Stats</Label>
+                            <p className="text-xs text-slate-500">Enable quick stats panel during games</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_quick_stats !== false ? "default" : "outline"}
+                            className={defaults.enable_quick_stats !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_quick_stats', defaults.enable_quick_stats === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_quick_stats !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Game Log</Label>
+                            <p className="text-xs text-slate-500">Enable play-by-play game log</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_game_log !== false ? "default" : "outline"}
+                            className={defaults.enable_game_log !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_game_log', defaults.enable_game_log === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_game_log !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Coin Toss Tracking</Label>
+                            <p className="text-xs text-slate-500">Track coin toss results</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_coin_toss !== false ? "default" : "outline"}
+                            className={defaults.enable_coin_toss !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_coin_toss', defaults.enable_coin_toss === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_coin_toss !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Preset Notifications */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Preset Notifications</h4>
+                      <p className="text-sm text-slate-500 mb-3">Customize quick notification buttons for game broadcasts</p>
+                      <div className="space-y-3">
+                        {(defaults.presetNotifications || [
+                          { id: 'big-play', label: 'Big Play', title: '🏈 Big Play!', message: 'What a play!' },
+                          { id: 'timeout', label: 'Timeout', title: '⏸️ Timeout', message: 'Timeout on the field' },
+                          { id: 'flag', label: 'Flag', title: '🚩 Flag', message: 'Flag on the play' },
+                          { id: 'review', label: 'Review', title: '🔄 Under Review', message: 'Play is under review' },
+                          { id: 'injury', label: 'Injury', title: '🏥 Injury', message: 'Injury timeout' },
+                        ]).map((preset, index) => (
+                          <div key={preset.id} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg space-y-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium w-20">Button {index + 1}</span>
+                              <Input
+                                placeholder="Button label"
+                                value={preset.label}
+                                onChange={(e) => {
+                                  const presets = defaults.presetNotifications || [
+                                    { id: 'big-play', label: 'Big Play', title: '🏈 Big Play!', message: 'What a play!' },
+                                    { id: 'timeout', label: 'Timeout', title: '⏸️ Timeout', message: 'Timeout on the field' },
+                                    { id: 'flag', label: 'Flag', title: '🚩 Flag', message: 'Flag on the play' },
+                                    { id: 'review', label: 'Review', title: '🔄 Under Review', message: 'Play is under review' },
+                                    { id: 'injury', label: 'Injury', title: '🏥 Injury', message: 'Injury timeout' },
+                                  ]
+                                  const updated = [...presets]
+                                  updated[index] = { ...updated[index], label: e.target.value }
+                                  updateDefaults('presetNotifications', updated)
+                                }}
+                                disabled={league.is_finished}
+                                className="h-8 w-24"
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Input
+                                placeholder="Title"
+                                value={preset.title}
+                                onChange={(e) => {
+                                  const presets = defaults.presetNotifications || [
+                                    { id: 'big-play', label: 'Big Play', title: '🏈 Big Play!', message: 'What a play!' },
+                                    { id: 'timeout', label: 'Timeout', title: '⏸️ Timeout', message: 'Timeout on the field' },
+                                    { id: 'flag', label: 'Flag', title: '🚩 Flag', message: 'Flag on the play' },
+                                    { id: 'review', label: 'Review', title: '🔄 Under Review', message: 'Play is under review' },
+                                    { id: 'injury', label: 'Injury', title: '🏥 Injury', message: 'Injury timeout' },
+                                  ]
+                                  const updated = [...presets]
+                                  updated[index] = { ...updated[index], title: e.target.value }
+                                  updateDefaults('presetNotifications', updated)
+                                }}
+                                disabled={league.is_finished}
+                                className="h-8"
+                              />
+                              <Input
+                                placeholder="Message"
+                                value={preset.message}
+                                onChange={(e) => {
+                                  const presets = defaults.presetNotifications || [
+                                    { id: 'big-play', label: 'Big Play', title: '🏈 Big Play!', message: 'What a play!' },
+                                    { id: 'timeout', label: 'Timeout', title: '⏸️ Timeout', message: 'Timeout on the field' },
+                                    { id: 'flag', label: 'Flag', title: '🚩 Flag', message: 'Flag on the play' },
+                                    { id: 'review', label: 'Review', title: '🔄 Under Review', message: 'Play is under review' },
+                                    { id: 'injury', label: 'Injury', title: '🏥 Injury', message: 'Injury timeout' },
+                                  ]
+                                  const updated = [...presets]
+                                  updated[index] = { ...updated[index], message: e.target.value }
+                                  updateDefaults('presetNotifications', updated)
+                                }}
+                                disabled={league.is_finished}
+                                className="h-8"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const presets = defaults.presetNotifications || [
+                              { id: 'big-play', label: 'Big Play', title: '🏈 Big Play!', message: 'What a play!' },
+                              { id: 'timeout', label: 'Timeout', title: '⏸️ Timeout', message: 'Timeout on the field' },
+                              { id: 'flag', label: 'Flag', title: '🚩 Flag', message: 'Flag on the play' },
+                              { id: 'review', label: 'Review', title: '🔄 Under Review', message: 'Play is under review' },
+                              { id: 'injury', label: 'Injury', title: '🏥 Injury', message: 'Injury timeout' },
+                            ]
+                            if (presets.length < 10) {
+                              updateDefaults('presetNotifications', [
+                                ...presets,
+                                { id: `custom-${Date.now()}`, label: 'New', title: 'New Notification', message: '' }
+                              ])
+                            }
+                          }}
+                          disabled={league.is_finished || (defaults.presetNotifications?.length || 5) >= 10}
+                          className="w-full"
+                        >
+                          + Add Preset Notification
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Scoring Rules */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Scoring Rules</h4>
+                      <p className="text-sm text-slate-500 mb-3">Configure point values and conversion options</p>
+                      
+                      {/* Point Values */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Touchdown</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={defaults.td_points ?? 6}
+                            onChange={(e) => updateDefaults('td_points', parseInt(e.target.value) || 6)}
+                            disabled={league.is_finished}
+                            className="h-8"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Field Goal</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={defaults.fg_points ?? 3}
+                            onChange={(e) => updateDefaults('fg_points', parseInt(e.target.value) || 3)}
+                            disabled={league.is_finished}
+                            className="h-8"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Safety</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={defaults.safety_points ?? 2}
+                            onChange={(e) => updateDefaults('safety_points', parseInt(e.target.value) || 2)}
+                            disabled={league.is_finished}
+                            className="h-8"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Extra Point</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="5"
+                            value={defaults.pat_points ?? 1}
+                            onChange={(e) => updateDefaults('pat_points', parseInt(e.target.value) || 1)}
+                            disabled={league.is_finished}
+                            className="h-8"
+                          />
+                        </div>
+                      </div>
+
+                      {/* PAT/Conversion Options */}
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">PAT/Conversion Options</Label>
+                        <p className="text-xs text-slate-500">Configure up to 3 conversion options after touchdowns</p>
+                        
+                        {/* PAT Option 1 */}
+                        <div className="flex items-center gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded">
+                          <div className="flex items-center gap-2 flex-1">
+                            <Input
+                              placeholder="Option name (e.g., Extra Point)"
+                              value={defaults.pat_option_1_name ?? 'Extra Point'}
+                              onChange={(e) => updateDefaults('pat_option_1_name', e.target.value)}
+                              disabled={league.is_finished}
+                              className="h-8 flex-1"
+                            />
+                            <Input
+                              type="number"
+                              min="1"
+                              max="5"
+                              value={defaults.pat_option_1_points ?? 1}
+                              onChange={(e) => updateDefaults('pat_option_1_points', parseInt(e.target.value) || 1)}
+                              disabled={league.is_finished}
+                              className="h-8 w-16"
+                            />
+                            <span className="text-xs text-slate-500">pts</span>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.pat_option_1_enabled !== false ? "default" : "outline"}
+                            className={`h-7 ${defaults.pat_option_1_enabled !== false ? "bg-green-600" : ""}`}
+                            onClick={() => updateDefaults('pat_option_1_enabled', defaults.pat_option_1_enabled === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.pat_option_1_enabled !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+
+                        {/* PAT Option 2 */}
+                        <div className="flex items-center gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded">
+                          <div className="flex items-center gap-2 flex-1">
+                            <Input
+                              placeholder="Option name (e.g., 2-Point)"
+                              value={defaults.pat_option_2_name ?? '2-Point Conversion'}
+                              onChange={(e) => updateDefaults('pat_option_2_name', e.target.value)}
+                              disabled={league.is_finished}
+                              className="h-8 flex-1"
+                            />
+                            <Input
+                              type="number"
+                              min="1"
+                              max="5"
+                              value={defaults.pat_option_2_points ?? 2}
+                              onChange={(e) => updateDefaults('pat_option_2_points', parseInt(e.target.value) || 2)}
+                              disabled={league.is_finished}
+                              className="h-8 w-16"
+                            />
+                            <span className="text-xs text-slate-500">pts</span>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.pat_option_2_enabled !== false ? "default" : "outline"}
+                            className={`h-7 ${defaults.pat_option_2_enabled !== false ? "bg-green-600" : ""}`}
+                            onClick={() => updateDefaults('pat_option_2_enabled', defaults.pat_option_2_enabled === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.pat_option_2_enabled !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+
+                        {/* PAT Option 3 (Custom) */}
+                        <div className="flex items-center gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded">
+                          <div className="flex items-center gap-2 flex-1">
+                            <Input
+                              placeholder="Custom option (e.g., 3-Point)"
+                              value={defaults.pat_option_3_name ?? ''}
+                              onChange={(e) => updateDefaults('pat_option_3_name', e.target.value)}
+                              disabled={league.is_finished}
+                              className="h-8 flex-1"
+                            />
+                            <Input
+                              type="number"
+                              min="1"
+                              max="5"
+                              value={defaults.pat_option_3_points ?? 3}
+                              onChange={(e) => updateDefaults('pat_option_3_points', parseInt(e.target.value) || 3)}
+                              disabled={league.is_finished}
+                              className="h-8 w-16"
+                            />
+                            <span className="text-xs text-slate-500">pts</span>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.pat_option_3_enabled === true ? "default" : "outline"}
+                            className={`h-7 ${defaults.pat_option_3_enabled === true ? "bg-green-600" : ""}`}
+                            onClick={() => updateDefaults('pat_option_3_enabled', !defaults.pat_option_3_enabled)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.pat_option_3_enabled === true ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Special Teams Options */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Special Teams Options</h4>
+                      <p className="text-sm text-slate-500 mb-3">Configure kickoff and special teams rules</p>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Onside Kicks</Label>
+                            <p className="text-xs text-slate-500">Allow traditional onside kicks</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_onside_kicks !== false ? "default" : "outline"}
+                            className={defaults.enable_onside_kicks !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_onside_kicks', defaults.enable_onside_kicks === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_onside_kicks !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>4th Down Conversion (Onside Alternative)</Label>
+                            <p className="text-xs text-slate-500">Allow 4th & 15 from own 25 instead of onside</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_4th_down_onside === true ? "default" : "outline"}
+                            className={defaults.enable_4th_down_onside === true ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_4th_down_onside', !defaults.enable_4th_down_onside)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_4th_down_onside === true ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Kickoff-Free Option</Label>
+                            <p className="text-xs text-slate-500">Start drives at set yard line instead of kickoffs</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_kickoff_free === true ? "default" : "outline"}
+                            className={defaults.enable_kickoff_free === true ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_kickoff_free', !defaults.enable_kickoff_free)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_kickoff_free === true ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        {defaults.enable_kickoff_free && (
+                          <div className="ml-4 space-y-2">
+                            <Label className="text-xs">Starting Yard Line (after scores)</Label>
+                            <Input
+                              type="number"
+                              min="15"
+                              max="35"
+                              value={defaults.kickoff_free_yard ?? 25}
+                              onChange={(e) => updateDefaults('kickoff_free_yard', parseInt(e.target.value) || 25)}
+                              disabled={league.is_finished}
+                              className="h-8 w-24"
+                            />
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Fair Catch Kick</Label>
+                            <p className="text-xs text-slate-500">Allow field goal attempt after fair catch</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_fair_catch_kick !== false ? "default" : "outline"}
+                            className={defaults.enable_fair_catch_kick !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_fair_catch_kick', defaults.enable_fair_catch_kick === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_fair_catch_kick !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Punt Returns</Label>
+                            <p className="text-xs text-slate-500">Allow punt returns (vs fair catch only)</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_punt_returns !== false ? "default" : "outline"}
+                            className={defaults.enable_punt_returns !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_punt_returns', defaults.enable_punt_returns === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_punt_returns !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Game Rules */}
+                    <div>
+                      <h4 className="font-medium mb-3 text-slate-700 dark:text-slate-300">Game Rules</h4>
+                      <p className="text-sm text-slate-500 mb-3">Configure gameplay rules and options</p>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Two-Minute Warning</Label>
+                            <p className="text-xs text-slate-500">Stop clock at 2:00 in each half</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_two_minute_warning !== false ? "default" : "outline"}
+                            className={defaults.enable_two_minute_warning !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_two_minute_warning', defaults.enable_two_minute_warning === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_two_minute_warning !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Challenges</Label>
+                            <p className="text-xs text-slate-500">Allow coach's challenges</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_challenges !== false ? "default" : "outline"}
+                            className={defaults.enable_challenges !== false ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_challenges', defaults.enable_challenges === false)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_challenges !== false ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Mercy Rule</Label>
+                            <p className="text-xs text-slate-500">End game early if score difference exceeds threshold</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_mercy_rule === true ? "default" : "outline"}
+                            className={defaults.enable_mercy_rule === true ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_mercy_rule', !defaults.enable_mercy_rule)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_mercy_rule === true ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        {defaults.enable_mercy_rule && (
+                          <div className="ml-4 grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs">Point Difference</Label>
+                              <Input
+                                type="number"
+                                min="14"
+                                max="70"
+                                value={defaults.mercy_rule_points ?? 35}
+                                onChange={(e) => updateDefaults('mercy_rule_points', parseInt(e.target.value) || 35)}
+                                disabled={league.is_finished}
+                                className="h-8"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">After Quarter</Label>
+                              <select
+                                value={defaults.mercy_rule_quarter ?? 'Q3'}
+                                onChange={(e) => updateDefaults('mercy_rule_quarter', e.target.value)}
+                                disabled={league.is_finished}
+                                className="h-8 w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-sm"
+                              >
+                                <option value="Q2">Halftime</option>
+                                <option value="Q3">Q3</option>
+                                <option value="Q4">Q4</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Running Clock (Mercy)</Label>
+                            <p className="text-xs text-slate-500">Clock runs continuously when mercy rule active</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={defaults.enable_running_clock === true ? "default" : "outline"}
+                            className={defaults.enable_running_clock === true ? "bg-green-600" : ""}
+                            onClick={() => updateDefaults('enable_running_clock', !defaults.enable_running_clock)}
+                            disabled={league.is_finished}
+                          >
+                            {defaults.enable_running_clock === true ? 'ON' : 'OFF'}
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label>Overtime Format</Label>
+                            <p className="text-xs text-slate-500">How overtime is played</p>
+                          </div>
+                          <select
+                            value={defaults.ot_format ?? 'nfl'}
+                            onChange={(e) => updateDefaults('ot_format', e.target.value)}
+                            disabled={league.is_finished}
+                            className="h-8 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-sm"
+                          >
+                            <option value="nfl">NFL (Sudden Death after 1st)</option>
+                            <option value="college">College (Alternating possessions)</option>
+                            <option value="sudden">Sudden Death</option>
+                            <option value="full">Full Period</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )
+              })()}
             </CardContent>
           </Card>
           </>
@@ -3166,13 +4570,14 @@ export default function LeagueDetailPage() {
             <div className="space-y-2">
               <Label>Home Team</Label>
               <Select
-                value={gameEditForm.home_team_id}
-                onValueChange={(value) => setGameEditForm({ ...gameEditForm, home_team_id: value })}
+                value={gameEditForm.home_team_id || 'tbd'}
+                onValueChange={(value) => setGameEditForm({ ...gameEditForm, home_team_id: value === 'tbd' ? '' : value })}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select home team" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="tbd">TBD</SelectItem>
                   {(league?.teams || []).map((team) => (
                     <SelectItem key={team.id} value={team.id}>
                       <div className="flex items-center gap-2">
@@ -3187,13 +4592,14 @@ export default function LeagueDetailPage() {
             <div className="space-y-2">
               <Label>Away Team</Label>
               <Select
-                value={gameEditForm.away_team_id}
-                onValueChange={(value) => setGameEditForm({ ...gameEditForm, away_team_id: value })}
+                value={gameEditForm.away_team_id || 'tbd'}
+                onValueChange={(value) => setGameEditForm({ ...gameEditForm, away_team_id: value === 'tbd' ? '' : value })}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select away team" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="tbd">TBD</SelectItem>
                   {(league?.teams || []).map((team) => (
                     <SelectItem key={team.id} value={team.id}>
                       <div className="flex items-center gap-2">
@@ -3329,6 +4735,83 @@ export default function LeagueDetailPage() {
                 </p>
               </div>
             )}
+            
+            {/* Share via Email/SMS */}
+            <div className="space-y-2 pt-2 border-t">
+              <Label className="text-sm text-slate-500">Share via</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => {
+                    const shareUrl = `${window.location.origin}/share/${shareInfo.type}/${shareInfo.code}`
+                    const typeLabel = shareInfo.type === 'game' ? 'Game' : shareInfo.type === 'league' ? 'League' : 'Bracket'
+                    const subject = encodeURIComponent(`Watch: ${shareInfo.name}`)
+                    const body = encodeURIComponent(`Check out this ${typeLabel.toLowerCase()}!\n\n${shareInfo.name}\nShare Code: ${shareInfo.code}\n\nView here: ${shareUrl}`)
+                    window.open(`mailto:?subject=${subject}&body=${body}`, '_blank')
+                  }}
+                >
+                  📧 Email
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => {
+                    const shareUrl = `${window.location.origin}/share/${shareInfo.type}/${shareInfo.code}`
+                    const typeLabel = shareInfo.type === 'game' ? 'Game' : shareInfo.type === 'league' ? 'League' : 'Bracket'
+                    const message = encodeURIComponent(`Check out this ${typeLabel.toLowerCase()}! ${shareInfo.name}\n\nCode: ${shareInfo.code}\n${shareUrl}`)
+                    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+                      window.open(`sms:?body=${message}`, '_blank')
+                    } else {
+                      navigator.clipboard.writeText(decodeURIComponent(message))
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 2000)
+                    }
+                  }}
+                >
+                  💬 Text/SMS
+                </Button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => {
+                    const shareUrl = `${window.location.origin}/share/${shareInfo.type}/${shareInfo.code}`
+                    const text = encodeURIComponent(`${shareInfo.name} 🏈`)
+                    window.open(`https://twitter.com/intent/tweet?text=${text}&url=${encodeURIComponent(shareUrl)}`, '_blank', 'width=550,height=420')
+                  }}
+                >
+                  𝕏
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => {
+                    const shareUrl = `${window.location.origin}/share/${shareInfo.type}/${shareInfo.code}`
+                    window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank', 'width=550,height=420')
+                  }}
+                >
+                  📘
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => {
+                    const shareUrl = `${window.location.origin}/share/${shareInfo.type}/${shareInfo.code}`
+                    const text = encodeURIComponent(`${shareInfo.name} 🏈 ${shareUrl}`)
+                    window.open(`https://wa.me/?text=${text}`, '_blank')
+                  }}
+                >
+                  💚
+                </Button>
+              </div>
+            </div>
 
             {/* Invite by Username */}
             {user && (

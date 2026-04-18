@@ -39,7 +39,14 @@ export default function ScoreboardsPage() {
     away_logo_file: null,
     away_logo_preview: null,
     simple_mode: false,
+    // Game settings
+    quarter_length: '15:00',
+    halftime_length: '20:00',
+    overtime_length: '10:00',
+    play_clock_duration: 40,
+    timeouts_per_half: 3,
   })
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const homeLogoRef = useRef(null)
   const awayLogoRef = useRef(null)
   const { user } = useAuth()
@@ -99,6 +106,12 @@ export default function ScoreboardsPage() {
         away_color3: formData.away_color3 || null,
         away_logo_url: formData.away_logo_url || null,
         simple_mode: formData.simple_mode,
+        // Game settings
+        quarter_length: formData.quarter_length,
+        halftime_length: formData.halftime_length,
+        overtime_length: formData.overtime_length,
+        play_clock_duration: formData.play_clock_duration,
+        timeouts_per_half: formData.timeouts_per_half,
       })
 
       // Upload logos if files were selected
@@ -131,7 +144,13 @@ export default function ScoreboardsPage() {
         away_logo_file: null,
         away_logo_preview: null,
         simple_mode: false,
+        quarter_length: '15:00',
+        halftime_length: '20:00',
+        overtime_length: '10:00',
+        play_clock_duration: 40,
+        timeouts_per_half: 3,
       })
+      setShowAdvanced(false)
       // Navigate to the game controller
       navigate(`/standalone/${game.id}`)
     } catch (error) {
@@ -368,6 +387,78 @@ export default function ScoreboardsPage() {
                     </p>
                   </div>
                 </div>
+
+                {/* Advanced Game Settings */}
+                {!formData.simple_mode && (
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowAdvanced(!showAdvanced)}
+                      className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                    >
+                      <ChevronRight className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} />
+                      Game Settings
+                    </button>
+                    
+                    {showAdvanced && (
+                      <div className="p-3 rounded-lg border space-y-3">
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <Label className="text-xs">Quarter Length</Label>
+                            <Input
+                              value={formData.quarter_length}
+                              onChange={(e) => setFormData({ ...formData, quarter_length: e.target.value })}
+                              placeholder="15:00"
+                              className="h-8"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Halftime Length</Label>
+                            <Input
+                              value={formData.halftime_length}
+                              onChange={(e) => setFormData({ ...formData, halftime_length: e.target.value })}
+                              placeholder="20:00"
+                              className="h-8"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">OT Length</Label>
+                            <Input
+                              value={formData.overtime_length}
+                              onChange={(e) => setFormData({ ...formData, overtime_length: e.target.value })}
+                              placeholder="10:00"
+                              className="h-8"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <Label className="text-xs">Play Clock (seconds)</Label>
+                            <Input
+                              type="number"
+                              value={formData.play_clock_duration}
+                              onChange={(e) => setFormData({ ...formData, play_clock_duration: parseInt(e.target.value) || 40 })}
+                              min={10}
+                              max={60}
+                              className="h-8"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Timeouts per Half</Label>
+                            <Input
+                              type="number"
+                              value={formData.timeouts_per_half}
+                              onChange={(e) => setFormData({ ...formData, timeouts_per_half: parseInt(e.target.value) || 3 })}
+                              min={0}
+                              max={5}
+                              className="h-8"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button type="submit">Create Game</Button>

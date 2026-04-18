@@ -66,6 +66,7 @@ export function GameScoreboardDisplay({
   showFirstDown,
   showIncomplete,
   showOutOfBounds,
+  show3AndOut,
   showTurnoverOnDowns,
   showTurnover,
   showFumbleRecovery,
@@ -102,11 +103,23 @@ export function GameScoreboardDisplay({
   showCommercial,
   extraInfo,
   hidePossession,
+  hidePossessionOutline,
   hideClock,
   displayStats,
   quickStats,
   viewerCount,
+  showCoinToss,
+  coinTossData,
 }) {
+  // Early return if no game data
+  if (!game) {
+    return (
+      <div className="bg-slate-900 rounded-2xl p-6 text-center">
+        <p className="text-slate-400">Loading game data...</p>
+      </div>
+    )
+  }
+  
   const homeTeam = game.home_team || { name: 'Home', abbreviation: 'HME', color: '#3B82F6' }
   const awayTeam = game.away_team || { name: 'Away', abbreviation: 'AWY', color: '#6B7280' }
 
@@ -123,6 +136,7 @@ export function GameScoreboardDisplay({
   showFirstDown = showFirstDown ?? displayState?.showFirstDown ?? false
   showIncomplete = showIncomplete ?? displayState?.showIncomplete ?? false
   showOutOfBounds = showOutOfBounds ?? displayState?.showOutOfBounds ?? false
+  show3AndOut = show3AndOut ?? displayState?.show3AndOut ?? false
   showTurnoverOnDowns = showTurnoverOnDowns ?? displayState?.showTurnoverOnDowns ?? false
   showTurnover = showTurnover ?? displayState?.showTurnover ?? null
   showFumbleRecovery = showFumbleRecovery ?? displayState?.showFumbleRecovery ?? null
@@ -164,7 +178,10 @@ export function GameScoreboardDisplay({
   showCommercial = showCommercial ?? displayState?.showCommercial ?? false
   extraInfo = extraInfo ?? displayState?.extraInfo ?? { show: false, side: 'away', lines: [{ text: '', fontSize: 'md' }], bgColor: '#3b82f6', textColor: '#ffffff' }
   showPlayClock = showPlayClock ?? displayState?.showPlayClock ?? true
+  showCoinToss = showCoinToss ?? displayState?.showCoinToss ?? false
+  coinTossData = coinTossData ?? displayState?.coinTossData ?? { winner: null, choice: null }
   hidePossession = hidePossession ?? displayState?.hidePossession ?? false
+  hidePossessionOutline = hidePossessionOutline ?? displayState?.hidePossessionOutline ?? false
   hideClock = hideClock ?? displayState?.hideClock ?? false
   displayStats = displayStats ?? displayState?.displayStats ?? { show: false, quarterScores: false, turnovers: false, firstDowns: false, penalties: false, all: false }
   quickStats = quickStats ?? displayState?.quickStats ?? { home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 }, away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 } }
@@ -182,6 +199,93 @@ export function GameScoreboardDisplay({
       setRemoveDownDistanceSpace(false)
     }
   }, [hideDownDistance])
+  
+  // Fade-out state management for overlays
+  const [fading3AndOut, setFading3AndOut] = useState(false)
+  const [visible3AndOut, setVisible3AndOut] = useState(false)
+  const [fadingTurnover, setFadingTurnover] = useState(false)
+  const [visibleTurnover, setVisibleTurnover] = useState(null)
+  const [fadingFirstDown, setFadingFirstDown] = useState(false)
+  const [visibleFirstDown, setVisibleFirstDown] = useState(false)
+  const [fadingIncomplete, setFadingIncomplete] = useState(false)
+  const [visibleIncomplete, setVisibleIncomplete] = useState(false)
+  const [fadingOutOfBounds, setFadingOutOfBounds] = useState(false)
+  const [visibleOutOfBounds, setVisibleOutOfBounds] = useState(false)
+  
+  // Handle 3 and out fade
+  useEffect(() => {
+    if (show3AndOut && !visible3AndOut) {
+      setVisible3AndOut(true)
+      setFading3AndOut(false)
+    } else if (!show3AndOut && visible3AndOut) {
+      setFading3AndOut(true)
+      const timer = setTimeout(() => {
+        setVisible3AndOut(false)
+        setFading3AndOut(false)
+      }, 300)
+      return () => clearTimeout(timer)
+    }
+  }, [show3AndOut, visible3AndOut])
+  
+  // Handle turnover fade
+  useEffect(() => {
+    if (showTurnover && showTurnover !== 'selecting' && visibleTurnover !== showTurnover) {
+      setVisibleTurnover(showTurnover)
+      setFadingTurnover(false)
+    } else if (!showTurnover && visibleTurnover) {
+      setFadingTurnover(true)
+      const timer = setTimeout(() => {
+        setVisibleTurnover(null)
+        setFadingTurnover(false)
+      }, 300)
+      return () => clearTimeout(timer)
+    }
+  }, [showTurnover, visibleTurnover])
+  
+  // Handle first down fade
+  useEffect(() => {
+    if (showFirstDown && !visibleFirstDown) {
+      setVisibleFirstDown(true)
+      setFadingFirstDown(false)
+    } else if (!showFirstDown && visibleFirstDown) {
+      setFadingFirstDown(true)
+      const timer = setTimeout(() => {
+        setVisibleFirstDown(false)
+        setFadingFirstDown(false)
+      }, 300)
+      return () => clearTimeout(timer)
+    }
+  }, [showFirstDown, visibleFirstDown])
+  
+  // Handle incomplete fade
+  useEffect(() => {
+    if (showIncomplete && !visibleIncomplete) {
+      setVisibleIncomplete(true)
+      setFadingIncomplete(false)
+    } else if (!showIncomplete && visibleIncomplete) {
+      setFadingIncomplete(true)
+      const timer = setTimeout(() => {
+        setVisibleIncomplete(false)
+        setFadingIncomplete(false)
+      }, 300)
+      return () => clearTimeout(timer)
+    }
+  }, [showIncomplete, visibleIncomplete])
+  
+  // Handle out of bounds fade
+  useEffect(() => {
+    if (showOutOfBounds && !visibleOutOfBounds) {
+      setVisibleOutOfBounds(true)
+      setFadingOutOfBounds(false)
+    } else if (!showOutOfBounds && visibleOutOfBounds) {
+      setFadingOutOfBounds(true)
+      const timer = setTimeout(() => {
+        setVisibleOutOfBounds(false)
+        setFadingOutOfBounds(false)
+      }, 300)
+      return () => clearTimeout(timer)
+    }
+  }, [showOutOfBounds, visibleOutOfBounds])
 
   // Use game data for state if not provided directly
   // Note: possession can be null (no possession), so only fall back if undefined
@@ -584,6 +688,55 @@ export function GameScoreboardDisplay({
         </div>
       )}
 
+      {/* Coin Toss Display */}
+      {showCoinToss && coinTossData?.winner && (
+        <div className="bg-gradient-to-r from-amber-600 via-yellow-500 to-amber-600 rounded-lg px-4 py-4 mb-4 animate-bounce-in ring-2 ring-yellow-400 shadow-[0_0_30px_rgba(234,179,8,0.6)] relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+          {/* Coin sparkle effects */}
+          <div className="absolute inset-0 overflow-hidden">
+            <div className="absolute top-1 left-4 w-2 h-2 bg-white rounded-full animate-ping opacity-60" style={{ animationDuration: '1.5s' }} />
+            <div className="absolute top-2 right-8 w-1.5 h-1.5 bg-white rounded-full animate-ping opacity-50" style={{ animationDuration: '2s', animationDelay: '0.3s' }} />
+            <div className="absolute bottom-2 left-12 w-1 h-1 bg-white rounded-full animate-ping opacity-40" style={{ animationDuration: '1.8s', animationDelay: '0.6s' }} />
+          </div>
+          <div className="flex flex-col items-center justify-center gap-2 relative z-10">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl animate-spin" style={{ animationDuration: '0.5s', animationIterationCount: '2' }}>🪙</span>
+              <span className="text-2xl font-bold text-white tracking-wider" style={{ textShadow: '0 0 10px rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.5)' }}>
+                COIN TOSS
+              </span>
+              <span className="text-3xl animate-spin" style={{ animationDuration: '0.5s', animationIterationCount: '2', animationDirection: 'reverse' }}>🪙</span>
+            </div>
+            <div className="flex items-center gap-3 mt-1">
+              {/* Winner team display */}
+              {(coinTossData.winner === 'home' ? homeTeam.logo_url : awayTeam.logo_url) ? (
+                <img 
+                  src={coinTossData.winner === 'home' ? homeTeam.logo_url : awayTeam.logo_url}
+                  alt=""
+                  className="h-10 w-auto max-w-14 object-contain drop-shadow-lg"
+                />
+              ) : (
+                <div 
+                  className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-lg"
+                  style={{ backgroundColor: coinTossData.winner === 'home' ? homeTeam.color : awayTeam.color }}
+                >
+                  {coinTossData.winner === 'home' ? homeTeam.abbreviation : awayTeam.abbreviation}
+                </div>
+              )}
+              <div className="text-center">
+                <div className="text-lg font-bold text-white" style={{ textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}>
+                  {coinTossData.winner === 'home' ? homeTeam.name : awayTeam.name} WINS
+                </div>
+                {coinTossData.choice && (
+                  <div className="text-sm font-semibold text-yellow-100 uppercase tracking-wide">
+                    Elects to {coinTossData.choice === 'receive' ? '📥 Receive' : coinTossData.choice === 'kick' ? '🦵 Kick' : '⏳ Defer'}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Commercial Break Overlay */}
       {showCommercial && (
         <div className="bg-gradient-to-r from-slate-700 via-slate-600 to-slate-700 rounded-lg px-4 py-3 mb-4 animate-bounce-in ring-2 ring-slate-500 shadow-[0_0_25px_rgba(100,116,139,0.5)] relative overflow-hidden">
@@ -707,7 +860,11 @@ export function GameScoreboardDisplay({
                 {gameStatus === 'two-minute' && <><span className="animate-pulse inline-block mr-2">⏱️</span> TWO-MINUTE WARNING</>}
                 {gameStatus === 'weather' && <><span className="animate-pulse inline-block mr-2">⛈️</span> WEATHER DELAY</>}
                 {gameStatus === 'technical' && <><span className="animate-pulse inline-block mr-2">⚠️</span> TECHNICAL DIFFICULTIES</>}
-                {gameStatus === 'end-quarter' && <><span className="inline-block mr-2">🏁</span> END OF QUARTER</>}
+                {gameStatus === 'end-quarter' && (
+                  game.quarter === 'Q4' && game.home_score === game.away_score 
+                    ? <><span className="inline-block mr-2">🏁</span> END OF REGULATION</>
+                    : <><span className="inline-block mr-2">🏁</span> END OF QUARTER</>
+                )}
                 {gameStatus === 'halftime-show' && <><span className="animate-bounce inline-block mr-2">🎭</span> HALFTIME</>}
               </span>
             )}
@@ -762,14 +919,14 @@ export function GameScoreboardDisplay({
       )}
       
       {/* D&D Bar Container - holds both D&D and overlays that cover it */}
-      <div className={`relative overflow-hidden rounded-xl transition-all duration-500 ${
+      <div className={`relative rounded-xl transition-all duration-500 ${
         hideDownDistance && removeDownDistanceSpace && !(flagDisplayStage > 0 || reviewDisplayStage > 0 || challengeActive || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break' || showTimeoutDisplay)
-          ? 'h-0 mb-0'
+          ? 'h-0 mb-0 overflow-hidden'
           : 'mb-4'
       }`}>
-      {/* Flag/Review/Challenge/Big Play/Ad Break/Timeout Overlays - positioned absolutely to cover D&D */}
+      {/* Flag/Review/Challenge/Big Play/Ad Break/Timeout Overlays - positioned to cover D&D */}
       {(flagDisplayStage > 0 || reviewDisplayStage > 0 || challengeActive || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break' || showTimeoutDisplay) && (
-      <div className="absolute inset-0 z-10">
+      <div className="relative z-10">
         {/* Commercial Break Overlay */}
         {gameStatus === 'ad-break' && (
           <div className="rounded-xl flex items-center justify-center gap-3 py-2.5 px-5 animate-bounce-in bg-gradient-to-r from-purple-600 via-purple-500 to-purple-600 ring-2 ring-purple-400 shadow-[0_0_25px_rgba(168,85,247,0.5)] relative overflow-hidden">
@@ -887,82 +1044,150 @@ export function GameScoreboardDisplay({
         
         {/* FG Attempt Overlay */}
         {showFGAttempt && (
-          <div className={`rounded-xl flex items-center justify-center gap-3 py-2.5 px-5 animate-bounce-in relative overflow-hidden ring-2 ${
-            fgResult === 'good' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_25px_rgba(34,197,94,0.5)]' :
-            fgResult === 'no-good' || fgResult === 'blocked' ? 'bg-gradient-to-r from-red-600 via-red-500 to-red-600 ring-red-400 shadow-[0_0_25px_rgba(239,68,68,0.5)]' :
-            'bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 ring-amber-400 shadow-[0_0_25px_rgba(245,158,11,0.5)]'
+          <div className={`rounded-xl flex items-center justify-center gap-3 py-3 px-5 relative overflow-hidden ring-2 ${
+            fgResult === 'good' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_40px_rgba(34,197,94,0.7)] animate-glow-pulse' :
+            fgResult === 'doink' ? 'bg-gradient-to-r from-pink-600 via-pink-500 to-pink-600 ring-pink-400 shadow-[0_0_40px_rgba(236,72,153,0.7)] animate-fg-no-good-shake' :
+            fgResult === 'no-good' || fgResult === 'blocked' ? 'bg-gradient-to-r from-red-600 via-red-500 to-red-600 ring-red-400 shadow-[0_0_40px_rgba(239,68,68,0.7)] animate-fg-no-good-shake' :
+            'bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 ring-amber-400 shadow-[0_0_25px_rgba(245,158,11,0.5)] animate-bounce-in'
           }`}>
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
-            <span className="text-2xl relative z-10">🥅</span>
-            <span className="text-xl font-black text-white tracking-wider relative z-10">{fgDistance} YD FG ATTEMPT</span>
-            {fgResult && (
-              <span className="text-xl font-black text-white relative z-10">
-                {fgResult === 'good' ? '✓ GOOD!' : fgResult === 'blocked' ? '🚫 BLOCKED!' : '✗ NO GOOD!'}
+            
+            {/* Left upright */}
+            <div className={`w-1 h-10 rounded ${fgResult === 'good' ? 'bg-yellow-300 animate-fg-uprights-glow' : fgResult === 'doink' ? 'bg-pink-300 animate-pulse' : fgResult ? 'bg-gray-400' : 'bg-yellow-400'}`} />
+            
+            {/* Center content */}
+            <div className="flex flex-col items-center relative z-10">
+              <span 
+                key={`fg-text-${fgResult}`}
+                className={`text-xl font-black text-white tracking-wider ${fgResult ? 'animate-fade-in' : ''}`}
+              >
+                {fgDistance} YD FIELD GOAL
               </span>
-            )}
-            <span className="text-2xl relative z-10">🥅</span>
+              
+              {/* Result stamp */}
+              {fgResult && (
+                <span 
+                  key={`fg-result-${fgResult}`}
+                  className="text-2xl font-black animate-result-stamp text-white"
+                  style={{
+                    textShadow: fgResult === 'good' 
+                      ? '0 0 15px rgba(34,197,94,1), 0 0 30px rgba(34,197,94,0.8)' 
+                      : fgResult === 'doink'
+                      ? '0 0 15px rgba(236,72,153,1), 0 0 30px rgba(236,72,153,0.8)'
+                      : '0 0 15px rgba(239,68,68,1), 0 0 30px rgba(239,68,68,0.8)'
+                  }}
+                >
+                  {fgResult === 'good' ? '✓ GOOD!' : fgResult === 'doink' ? '🎯 DOINK!' : fgResult === 'blocked' ? '🚫 BLOCKED!' : '✗ NO GOOD!'}
+                </span>
+              )}
+            </div>
+            
+            {/* Right upright */}
+            <div className={`w-1 h-10 rounded ${fgResult === 'good' ? 'bg-yellow-300 animate-fg-uprights-glow' : fgResult === 'doink' ? 'bg-pink-300 animate-pulse' : fgResult ? 'bg-gray-400' : 'bg-yellow-400'}`} />
           </div>
         )}
         
         {/* PAT/2PT Attempt Overlay */}
         {showPATAttempt && (
-          <div className={`rounded-xl flex items-center justify-center gap-3 py-2.5 px-5 animate-bounce-in relative overflow-hidden ring-2 ${
-            patResult === 'good' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_25px_rgba(34,197,94,0.5)]' :
-            patResult === 'no-good' ? 'bg-gradient-to-r from-red-600 via-red-500 to-red-600 ring-red-400 shadow-[0_0_25px_rgba(239,68,68,0.5)]' :
-            showPATAttempt === 'pat' ? 'bg-gradient-to-r from-blue-600 via-blue-500 to-blue-600 ring-blue-400 shadow-[0_0_25px_rgba(59,130,246,0.5)]' : 
-            'bg-gradient-to-r from-purple-600 via-purple-500 to-purple-600 ring-purple-400 shadow-[0_0_25px_rgba(168,85,247,0.5)]'
+          <div className={`rounded-xl flex items-center justify-center gap-3 py-3 px-5 relative overflow-hidden ring-2 ${
+            patResult === 'good' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_40px_rgba(34,197,94,0.7)] animate-glow-pulse' :
+            patResult === 'doink' ? 'bg-gradient-to-r from-pink-600 via-pink-500 to-pink-600 ring-pink-400 shadow-[0_0_40px_rgba(236,72,153,0.7)] animate-fg-no-good-shake' :
+            patResult === 'no-good' || patResult === 'blocked' ? 'bg-gradient-to-r from-red-600 via-red-500 to-red-600 ring-red-400 shadow-[0_0_40px_rgba(239,68,68,0.7)] animate-fg-no-good-shake' :
+            patResult === 'blocked-return' ? 'bg-gradient-to-r from-cyan-600 via-cyan-500 to-cyan-600 ring-cyan-400 shadow-[0_0_40px_rgba(6,182,212,0.7)]' :
+            showPATAttempt === 'pat' ? 'bg-gradient-to-r from-blue-600 via-blue-500 to-blue-600 ring-blue-400 shadow-[0_0_25px_rgba(59,130,246,0.5)] animate-bounce-in' : 
+            'bg-gradient-to-r from-purple-600 via-purple-500 to-purple-600 ring-purple-400 shadow-[0_0_25px_rgba(168,85,247,0.5)] animate-bounce-in'
           }`}>
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
-            <span className={`text-2xl relative z-10 ${!patResult ? 'animate-bounce' : ''}`}>🏈</span>
-            <span 
-              key={`pat-text-${patResult}`}
-              className={`text-xl font-black text-white tracking-wider relative z-10 ${patResult ? 'animate-fade-in' : ''}`}
-            >
-              {showPATAttempt === 'pat' ? 'EXTRA POINT' : '2-POINT CONVERSION'}
-            </span>
-            {patResult && (
-              <span 
-                key={`pat-result-${patResult}`}
-                className={`text-xl font-black relative z-10 animate-fade-in ${
-                  patResult === 'good' ? 'text-white' : 'text-white'
-                }`}
-                style={{
-                  textShadow: patResult === 'good' 
-                    ? '0 0 10px rgba(255,255,255,0.8), 0 0 20px rgba(34,197,94,0.6)' 
-                    : '0 0 10px rgba(255,255,255,0.8), 0 0 20px rgba(239,68,68,0.6)'
-                }}
-              >
-                {patResult === 'good' ? '✓ GOOD!' : '✗ NO GOOD!'}
-              </span>
+            
+            {/* Left upright (PAT only) */}
+            {showPATAttempt === 'pat' && (
+              <div className={`w-1 h-10 rounded ${patResult === 'good' ? 'bg-yellow-300 animate-fg-uprights-glow' : patResult === 'doink' ? 'bg-pink-300 animate-pulse' : patResult ? 'bg-gray-400' : 'bg-yellow-400'}`} />
             )}
-            <span className={`text-2xl relative z-10 ${!patResult ? 'animate-bounce' : ''}`}>🏈</span>
+            
+            {/* 2PT left icon */}
+            {showPATAttempt === '2pt' && (
+              <span className={`text-2xl ${!patResult ? 'animate-bounce' : ''}`}>🏃</span>
+            )}
+            
+            {/* Center content */}
+            <div className="flex flex-col items-center relative z-10">
+              <span 
+                key={`pat-text-${patResult}`}
+                className={`text-xl font-black text-white tracking-wider ${patResult ? 'animate-fade-in' : ''}`}
+              >
+                {showPATAttempt === 'pat' ? 'EXTRA POINT' : '2-POINT CONVERSION'}
+              </span>
+              
+              {/* Result stamp */}
+              {patResult && (
+                <span 
+                  key={`pat-result-${patResult}`}
+                  className="text-2xl font-black animate-result-stamp text-white"
+                  style={{
+                    textShadow: patResult === 'good' 
+                      ? '0 0 15px rgba(34,197,94,1), 0 0 30px rgba(34,197,94,0.8)' 
+                      : patResult === 'doink'
+                      ? '0 0 15px rgba(236,72,153,1), 0 0 30px rgba(236,72,153,0.8)'
+                      : patResult === 'blocked-return'
+                      ? '0 0 15px rgba(6,182,212,1), 0 0 30px rgba(6,182,212,0.8)'
+                      : '0 0 15px rgba(239,68,68,1), 0 0 30px rgba(239,68,68,0.8)'
+                  }}
+                >
+                  {patResult === 'good' ? '✓ GOOD!' : 
+                   patResult === 'doink' ? '🎯 DOINK!' :
+                   patResult === 'blocked' ? '🚫 BLOCKED!' :
+                   patResult === 'blocked-return' ? (showPATAttempt === 'pat' ? '🏈 PICK 6!' : '🏈 PICK 2!') :
+                   '✗ NO GOOD!'}
+                </span>
+              )}
+            </div>
+            
+            {/* Right upright (PAT only) */}
+            {showPATAttempt === 'pat' && (
+              <div className={`w-1 h-10 rounded ${patResult === 'good' ? 'bg-yellow-300 animate-fg-uprights-glow' : patResult === 'doink' ? 'bg-pink-300 animate-pulse' : patResult ? 'bg-gray-400' : 'bg-yellow-400'}`} />
+            )}
+            
+            {/* 2PT right icon */}
+            {showPATAttempt === '2pt' && (
+              <span className="text-2xl">🥅</span>
+            )}
+          </div>
+        )}
+        
+        {/* 3 and Out Overlay */}
+        {visible3AndOut && (
+          <div className={`rounded-xl flex items-center justify-center gap-2 py-2.5 px-4 relative overflow-hidden ring-2 bg-gradient-to-r from-orange-600 via-amber-500 to-orange-600 ring-orange-400 shadow-[0_0_25px_rgba(249,115,22,0.5)] ${fading3AndOut ? 'animate-fade-out' : 'animate-bounce-in'}`}>
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+            <span className="text-xl animate-bounce relative z-10">3</span>
+            <span className="text-lg font-bold text-white tracking-wider relative z-10 whitespace-nowrap">AND OUT</span>
+            <span className="text-xl animate-bounce relative z-10" style={{ animationDelay: '0.15s' }}>🦶</span>
           </div>
         )}
         
         {/* Turnover Overlay */}
-        {showTurnover && showTurnover !== 'selecting' && (
-          <div className={`rounded-xl flex items-center justify-center gap-2 py-2.5 px-4 animate-bounce-in relative overflow-hidden ring-2 ${
-            showTurnover === 'reversed' ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-orange-600 ring-orange-400 shadow-[0_0_25px_rgba(249,115,22,0.5)]' : 
+        {visibleTurnover && visibleTurnover !== 'selecting' && (
+          <div className={`rounded-xl flex items-center justify-center gap-2 py-2.5 px-4 relative overflow-hidden ring-2 ${fadingTurnover ? 'animate-fade-out' : 'animate-bounce-in'} ${
+            visibleTurnover === 'reversed' ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-orange-600 ring-orange-400 shadow-[0_0_25px_rgba(249,115,22,0.5)]' : 
             'bg-gradient-to-r from-red-700 via-red-600 to-red-700 ring-red-400 shadow-[0_0_25px_rgba(239,68,68,0.5)]'
           }`}>
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
             <span className="text-xl animate-bounce relative z-10">
-              {showTurnover === 'downs' && '🔄'}
-              {showTurnover === 'interception' && '🙌'}
-              {showTurnover === 'fumble' && '🏈'}
-              {showTurnover === 'reversed' && '↩️'}
+              {visibleTurnover === 'downs' && '🔄'}
+              {visibleTurnover === 'interception' && '🙌'}
+              {visibleTurnover === 'fumble' && '🏈'}
+              {visibleTurnover === 'reversed' && '↩️'}
             </span>
             <span className="text-lg font-bold text-white tracking-wider relative z-10 whitespace-nowrap">
-              {showTurnover === 'downs' && 'TURNOVER ON DOWNS'}
-              {showTurnover === 'interception' && 'INTERCEPTION'}
-              {showTurnover === 'fumble' && 'FUMBLE'}
-              {showTurnover === 'reversed' && 'REVERSED'}
+              {visibleTurnover === 'downs' && 'TURNOVER ON DOWNS'}
+              {visibleTurnover === 'interception' && 'INTERCEPTION'}
+              {visibleTurnover === 'fumble' && 'FUMBLE'}
+              {visibleTurnover === 'reversed' && 'REVERSED'}
             </span>
             <span className="text-xl animate-bounce relative z-10" style={{ animationDelay: '0.15s' }}>
-              {showTurnover === 'downs' && '🔄'}
-              {showTurnover === 'interception' && '🙌'}
-              {showTurnover === 'fumble' && '🏈'}
-              {showTurnover === 'reversed' && '↩️'}
+              {visibleTurnover === 'downs' && '🔄'}
+              {visibleTurnover === 'interception' && '🙌'}
+              {visibleTurnover === 'fumble' && '🏈'}
+              {visibleTurnover === 'reversed' && '↩️'}
             </span>
           </div>
         )}
@@ -1040,9 +1265,11 @@ export function GameScoreboardDisplay({
       )}
       
       {/* Down & Distance Bar - animates collapse/expand horizontally from center */}
+      {/* Hide when overlay is showing */}
+      {!(flagDisplayStage > 0 || reviewDisplayStage > 0 || challengeActive || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break' || showTimeoutDisplay) && (
       <div 
         className={`transition-all duration-700 ease-in-out ${
-          hideDownDistance && !(flagDisplayStage > 0 || reviewDisplayStage > 0 || challengeActive || showFGAttempt || showPATAttempt || (showTurnover && showTurnover !== 'selecting') || bigPlay || gameStatus === 'ad-break' || showTimeoutDisplay)
+          hideDownDistance
             ? removeDownDistanceSpace ? 'hidden' : 'w-0 opacity-0 overflow-hidden h-0 mb-0'
             : 'w-full opacity-100 mb-4'
         }`}
@@ -1095,7 +1322,7 @@ export function GameScoreboardDisplay({
             </>
           )}
           <span 
-            key={`${down}-${distance}-${specialDistance}-${showFirstDown}-${showTurnoverOnDowns}-${showFumbleRecovery}-${showIncomplete}-${showOutOfBounds}`}
+            key={`${down}-${showDownOnly ? 'downonly' : distance}-${specialDistance}-${showFirstDown}-${showTurnoverOnDowns}-${showFumbleRecovery}-${showIncomplete}-${showOutOfBounds}`}
             className={`text-xl font-bold animate-fade-in ${
               showFirstDown ? 'text-yellow-100' 
                 : showTurnoverOnDowns ? 'text-red-100' 
@@ -1119,6 +1346,7 @@ export function GameScoreboardDisplay({
           </span>
         </div>
       </div>
+      )}
       </div>
       
       {/* Teams and Scores */}
@@ -1128,7 +1356,7 @@ export function GameScoreboardDisplay({
           {/* Extra Info Box - Left of Away Team */}
           {extraInfo?.show && extraInfo?.side === 'away' && extraInfo?.lines?.some(l => l.text) && (
             <div 
-              className="w-20 rounded-lg p-2 flex flex-col items-center justify-center text-center animate-slide-up transition-all duration-300 shrink-0"
+              className="w-24 rounded-lg p-2.5 flex flex-col items-center justify-center text-center animate-slide-up transition-all duration-300 shrink-0"
               style={{ backgroundColor: extraInfo.bgColor }}
             >
               {extraInfo.lines.map((line, index) => (
@@ -1154,7 +1382,7 @@ export function GameScoreboardDisplay({
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
-                    : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
+                    : (possession === 'away' && !hidePossession && !hidePossessionOutline) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
                 }`}
               />
             ) : (
@@ -1164,7 +1392,7 @@ export function GameScoreboardDisplay({
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
-                    : (possession === 'away' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
+                    : (possession === 'away' && !hidePossession && !hidePossessionOutline) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
                 }`}
               >
                 <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: awayTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>
@@ -1268,7 +1496,7 @@ export function GameScoreboardDisplay({
               {/* Timeout clock above game clock with single progress bar */}
               {showTimeoutDisplay && timeoutClock !== null && (() => {
                 const team = timeoutTeam === 'home' ? homeTeam : awayTeam
-                const maxTimeout = 60 // Assume 60 second timeout max
+                const maxTimeout = 120 // 2 minute max timeout
                 const progress = Math.min(100, (timeoutClock / maxTimeout) * 100)
                 return (
                   <div className="mb-2 w-full max-w-[180px] mx-auto">
@@ -1305,12 +1533,14 @@ export function GameScoreboardDisplay({
                 <span className={`text-4xl font-mono font-black tracking-tight ${
                   game.game_time === '0:00' 
                     ? 'text-red-500 drop-shadow-[0_0_12px_rgba(239,68,68,0.6)] animate-pulse' 
-                    : (['2nd', '4th', 'OT', 'OT1', 'OT2', 'OT3'].includes(game.quarter) && 
+                    : (['Q2', 'Q4', 'OT', 'OT1', 'OT2', 'OT3'].includes(game.quarter) && 
                        game.game_time && 
                        (() => {
                          const parts = game.game_time.split(':')
                          const mins = parseInt(parts[0]) || 0
-                         return mins < 2
+                         const secs = parseInt(parts[1]) || 0
+                         const totalSeconds = mins * 60 + secs
+                         return totalSeconds <= 120 // 2 minutes or less
                        })())
                       ? 'text-orange-400 drop-shadow-[0_0_10px_rgba(251,146,60,0.5)]'
                       : 'text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.4)]'
@@ -1343,17 +1573,17 @@ export function GameScoreboardDisplay({
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
-                    : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
+                    : (possession === 'home' && !hidePossession && !hidePossessionOutline) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg' : ''
                 }`}
               />
             ) : (
               <div 
                 className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
-                  hideDownDistance ? 'h-24' : 'h-16'
+                  hideDownDistance ? 'w-24 h-24' : 'w-16 h-16'
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
-                    : (possession === 'home' && !hidePossession) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
+                    : (possession === 'home' && !hidePossession && !hidePossessionOutline) ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-green-400/50 rounded-lg p-2' : ''
                 }`}
               >
                 <span className={`font-bold transition-all duration-500 ${hideDownDistance ? 'text-4xl' : 'text-2xl'}`} style={{ color: homeTeam.color, textShadow: '1px 1px 2px rgba(0,0,0,0.5)' }}>

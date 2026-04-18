@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { Plus, Minus, Play, Square, Share2, Copy, Check, Trophy, RotateCcw, Flag, Pause, Volume2, Bell, Search, X, Eye, EyeOff, Video, Upload, Trash2, Zap, Send, Settings, Keyboard } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -93,8 +93,11 @@ export default function LiveGamePage({ standalone = false }) {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   
-  // Use appropriate API based on standalone prop
-  const api = standalone ? standaloneGameApi : gameApi
+  // Use appropriate API based on standalone prop - memoized to prevent unnecessary reloads
+  const api = useMemo(() => standalone ? standaloneGameApi : gameApi, [standalone])
+  
+  // Track if initial load has completed - prevent re-fetching
+  const initialLoadDoneRef = useRef(false)
   
   // Timer state
   const [timerRunning, setTimerRunning] = useState(false)
@@ -107,8 +110,10 @@ export default function LiveGamePage({ standalone = false }) {
   const [playClock, setPlayClock] = useState(40)
   const [playClockRunning, setPlayClockRunning] = useState(false)
   const [showPlayClock, setShowPlayClock] = useState(true)
+  const [playClockDelay, setPlayClockDelay] = useState(0) // Delay in seconds before play clock starts
   const playClockRunningRef = useRef(false)
   const playClockRef = useRef(40) // Ref to track current play clock (source of truth for controller)
+  const playClockDelayTimeoutRef = useRef(null) // Ref for delay timeout
   const timeoutClockRunningRef = useRef(false)
   const simpleTimerRunningRef = useRef(false)
   
@@ -119,6 +124,7 @@ export default function LiveGamePage({ standalone = false }) {
   const [ballOn, setBallOn] = useState(25)
   const [possession, setPossession] = useState('home') // 'home', 'away', or null (no possession)
   const [hidePossession, setHidePossession] = useState(false) // Hide possession indicator without clearing it
+  const [hidePossessionOutline, setHidePossessionOutline] = useState(false) // Hide just the green outline
   
   // Timeout state - 3 per half for each team
   const [homeTimeouts, setHomeTimeouts] = useState(3)
@@ -207,9 +213,6 @@ export default function LiveGamePage({ standalone = false }) {
   // Ad break prompt state
   const [showAdBreakPrompt, setShowAdBreakPrompt] = useState(false)
   
-  // Two-minute warning prompt state
-  const [show2MinWarningPrompt, setShow2MinWarningPrompt] = useState(false)
-  
   // OT score end game prompt state
   const [showOTEndPrompt, setShowOTEndPrompt] = useState(false)
   
@@ -230,6 +233,7 @@ export default function LiveGamePage({ standalone = false }) {
   
   // Out of bounds display state
   const [showOutOfBounds, setShowOutOfBounds] = useState(false)
+  const [show3AndOut, setShow3AndOut] = useState(false)
   
   // Turnover display state
   const [showTurnover, setShowTurnover] = useState(null) // null, 'downs', 'interception', 'fumble', 'punt', 'safety'
@@ -281,17 +285,43 @@ export default function LiveGamePage({ standalone = false }) {
   // Share dialog state
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   
+  // Quick finish dialog state
+  const [showQuickFinish, setShowQuickFinish] = useState(false)
+  const [quickFinishScores, setQuickFinishScores] = useState({ home: 0, away: 0 })
+  
   // Keybinds enabled state (synced with localStorage, default: disabled)
   const [keybindsEnabled, setKeybindsEnabled] = useState(() => getKeybindsEnabled())
   
   // Quick stats panel state
   const [showQuickStats, setShowQuickStats] = useState(false)
   const [quickStats, setQuickStats] = useState({
-    home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 },
-    away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 },
+    home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0, thirdDownAtt: 0, thirdDownConv: 0, fourthDownAtt: 0, fourthDownConv: 0 },
+    away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0, thirdDownAtt: 0, thirdDownConv: 0, fourthDownAtt: 0, fourthDownConv: 0 },
     // Custom stats - array of { id, label, shortLabel, home, away, color }
-    custom: []
+    custom: [],
+    // Awards/trophies - array of { id, label, emoji, home, away }
+    awards: []
   })
+  
+  // Awards panel state
+  const [showAwards, setShowAwards] = useState(false)
+  const [showAwardDialog, setShowAwardDialog] = useState(false)
+  const [editingAward, setEditingAward] = useState(null)
+  const [awardForm, setAwardForm] = useState({ label: '', emoji: '🏆' })
+  
+  // Coin toss state
+  const [coinToss, setCoinToss] = useState({
+    winner: null, // 'home' or 'away'
+    choice: null, // 'receive', 'kick', 'defer'
+  })
+  const [showCoinToss, setShowCoinToss] = useState(false)
+  
+  // Time of possession tracking
+  const [timeOfPossession, setTimeOfPossession] = useState({ home: 0, away: 0 }) // in seconds
+  const lastPossessionChangeRef = useRef(null)
+  
+  // Game log for play-by-play
+  const [gameLog, setGameLog] = useState([]) // array of { timestamp, quarter, time, type, description, team }
   const [showCustomStatDialog, setShowCustomStatDialog] = useState(false)
   const [editingCustomStat, setEditingCustomStat] = useState(null) // null for new, or stat object for edit
   const [customStatForm, setCustomStatForm] = useState({ label: '', shortLabel: '', color: '#3b82f6' })
@@ -306,10 +336,38 @@ export default function LiveGamePage({ standalone = false }) {
     customStats: [] // array of custom stat IDs to display
   })
   
+  // Notifications state
+  const [notificationSettings, setNotificationSettings] = useState({
+    autoScores: true,        // Auto-notify on scores
+    autoTouchdowns: true,    // Auto-notify on TDs
+    autoTurnovers: false,    // Auto-notify on turnovers
+    autoQuarterEnd: true,    // Auto-notify on quarter end
+    autoGameEnd: true,       // Auto-notify on game end
+    autoHalftime: true,      // Auto-notify at halftime
+  })
+  const [showNotificationPanel, setShowNotificationPanel] = useState(true)
+  const [customNotificationTitle, setCustomNotificationTitle] = useState('')
+  const [customNotificationMessage, setCustomNotificationMessage] = useState('')
+  const [notificationHistory, setNotificationHistory] = useState([])
+  
+  // Preset notifications from league settings (or defaults)
+  const defaultPresetNotifications = [
+    { id: 'big-play', label: 'Big Play', title: '🏈 Big Play!', message: 'What a play!' },
+    { id: 'timeout', label: 'Timeout', title: '⏸️ Timeout', message: 'Timeout on the field' },
+    { id: 'flag', label: 'Flag', title: '🚩 Flag', message: 'Flag on the play' },
+    { id: 'review', label: 'Review', title: '🔄 Under Review', message: 'Play is under review' },
+    { id: 'injury', label: 'Injury', title: '🏥 Injury', message: 'Injury timeout' },
+  ]
+  
   // Throttle ref for game time sync (to avoid flooding API)
   const lastTimeSyncRef = useRef(0)
 
   const loadGame = useCallback(async () => {
+    // Skip if already loaded - prevents state reset on re-renders
+    if (initialLoadDoneRef.current) {
+      return
+    }
+    
     try {
       const data = await api.get(gameId)
       
@@ -346,6 +404,11 @@ export default function LiveGamePage({ standalone = false }) {
       
       setGame(data)
       
+      // Initialize gameTimeRef with the loaded game time (source of truth for controller)
+      if (data.game_time) {
+        gameTimeRef.current = data.game_time
+      }
+      
       // Restore state from display_state
       if (data.display_state) {
         try {
@@ -356,6 +419,12 @@ export default function LiveGamePage({ standalone = false }) {
           if (savedState.displayStats) setDisplayStats(savedState.displayStats)
           // Restore game status
           if (savedState.gameStatus) setGameStatus(savedState.gameStatus)
+          // Restore coin toss
+          if (savedState.coinToss) setCoinToss(savedState.coinToss)
+          // Restore time of possession
+          if (savedState.timeOfPossession) setTimeOfPossession(savedState.timeOfPossession)
+          // Restore game log
+          if (savedState.gameLog) setGameLog(savedState.gameLog)
           // Restore visibility settings
           if (savedState.hideDownDistance !== undefined) setHideDownDistance(savedState.hideDownDistance)
           if (savedState.hideTimeouts !== undefined) setHideTimeouts(savedState.hideTimeouts)
@@ -395,6 +464,8 @@ export default function LiveGamePage({ standalone = false }) {
       } else {
         setLinkedBracketMatch(null)
       }
+      // Mark initial load as complete
+      initialLoadDoneRef.current = true
     } catch (error) {
       console.error('Failed to load game:', error)
     } finally {
@@ -494,17 +565,16 @@ export default function LiveGamePage({ standalone = false }) {
     if (!game?.share_code) return
 
     const ws = createWebSocket('game', game.share_code, (message) => {
-      // Controller is the source of truth for game_time and play_clock - ALWAYS ignore from WebSocket
-      // This prevents the clocks from jumping around due to stale updates
+      // Controller is the source of truth - ignore most WebSocket updates
+      // The controller manages state locally and syncs to backend
+      // WebSocket updates are for viewers, not the controller
       if (message.type === 'game_update') {
-        setGame((prev) => {
-          // Always ignore game_time and play_clock from WebSocket on the controller
-          // The controller manages these locally and syncs to backend
-          const { game_time, timer_running, timer_started_at, timer_started_seconds, play_clock, ...rest } = message.data
-          // Preserve the current game time from our ref (source of truth)
-          const preservedTime = gameTimeRef.current || prev?.game_time
-          return { ...prev, ...rest, game_time: preservedTime }
-        })
+        // On the controller, we only use WebSocket for viewer count updates
+        // All game state is managed locally - ignore WebSocket game data entirely
+        // This prevents race conditions where stale server data overwrites local edits
+        if (message.data?.viewer_count !== undefined) {
+          setGame((prev) => prev ? { ...prev, viewer_count: message.data.viewer_count } : prev)
+        }
       }
     })
 
@@ -674,27 +744,32 @@ export default function LiveGamePage({ standalone = false }) {
           // Same as the "⏱️ Down" quick action button
           if (!playClockRunning) {
             setPlayClock(40)
-            startPlayClock(40)
+            startPlayClock(40, true)
           }
           setShowDownOnly(true)
           nextDown()
           break
         case 'firstDown':
-          // Show first down overlay and reset downs
-          stopTimer()
+          // Show first down overlay and reset downs (don't stop game clock)
           setShowFirstDown(true)
           setTimeout(() => setShowFirstDown(false), 3000)
           setDown(1)
           setDistance(10)
           setShowDownOnly(false)
           resetPlayClock(40)
-          startPlayClock(40)
+          startPlayClock(40, true)
           break
         case 'yardsPlus5':
           setDistance(prev => Math.min(99, prev + 5))
           break
         case 'yardsMinus5':
           setDistance(prev => Math.max(1, prev - 5))
+          break
+        case 'yardsPlus1':
+          setDistance(prev => Math.min(99, prev + 1))
+          break
+        case 'yardsMinus1':
+          setDistance(prev => Math.max(1, prev - 1))
           break
         case 'toggleDDVisible':
           setHideDownDistance(prev => !prev)
@@ -710,7 +785,7 @@ export default function LiveGamePage({ standalone = false }) {
           setTimeout(() => setShowIncomplete(false), 2000)
           setDown(prev => prev < 4 ? prev + 1 : 1)
           resetPlayClock(40)
-          startPlayClock(40)
+          startPlayClock(40, true)
           break
         case 'outOfBounds':
           stopTimer()
@@ -737,6 +812,7 @@ export default function LiveGamePage({ standalone = false }) {
           break
         case 'interception':
           // Same as D&D turnover quick action - shows turnover overlay with pending review
+          console.log('Interception keybind triggered, stopping timer')
           stopTimer()
           setShowTurnover('interception')
           setPendingTurnoverReview('interception')
@@ -781,8 +857,14 @@ export default function LiveGamePage({ standalone = false }) {
           
         // Overlays
         case 'injury':
-          setShowInjury(prev => !prev)
-          if (!showInjury) stopTimer()
+          // Toggle injury status (same as the injury button)
+          if (gameStatus === 'injury' || gameStatus === 'injury-timeout') {
+            setGameStatus(null)
+            setInjuryTeam(null)
+          } else {
+            setGameStatus('injury')
+            stopTimer()
+          }
           break
         case 'commercial':
           // Toggle ad-break game status
@@ -844,6 +926,7 @@ export default function LiveGamePage({ standalone = false }) {
       showFirstDown,
       showIncomplete,
       showOutOfBounds,
+      show3AndOut,
       showTurnoverOnDowns,
       showTurnover,
       showFumbleRecovery,
@@ -876,9 +959,15 @@ export default function LiveGamePage({ standalone = false }) {
       showInjury,
       extraInfo,
       hidePossession,
+      hidePossessionOutline,
       hideClock,
       displayStats,
       quickStats,
+      coinToss,
+      showCoinToss,
+      coinTossData: coinToss,
+      timeOfPossession,
+      gameLog,
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -896,7 +985,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hideClock, displayStats, quickStats])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -910,6 +999,10 @@ export default function LiveGamePage({ standalone = false }) {
   async function updateGame(updates) {
     // Update local state immediately for responsive UI
     // But don't update game_time if timer is running (it manages its own time)
+    if (updates.game_time && !timerRunningRef.current) {
+      // Update the ref as source of truth when explicitly setting game_time
+      gameTimeRef.current = updates.game_time
+    }
     setGame(prev => {
       if (timerRunningRef.current && updates.game_time) {
         const { game_time, ...rest } = updates
@@ -1020,8 +1113,8 @@ export default function LiveGamePage({ standalone = false }) {
         await updateGame({ [field]: newScore })
         setScoreCelebration(null)
       }, 5000)
-    } else if (delta === 3) {
-      // Field Goal - show celebration first, then update score after animation
+    } else if (delta === 3 || delta === 4) {
+      // Field Goal (3 or 4 points) - show celebration first, then update score after animation
       setScoreCelebration({ type: 'fieldgoal', team, points: delta, ...celebrationData })
       setTimeout(async () => {
         await updateGame({ [field]: newScore })
@@ -1091,6 +1184,185 @@ export default function LiveGamePage({ standalone = false }) {
   
   function clearBigPlay() {
     setBigPlay(null)
+  }
+  
+  // Add entry to game log
+  function addGameLogEntry(type, description, team = null) {
+    const entry = {
+      id: Date.now(),
+      timestamp: new Date().toISOString(),
+      quarter: game?.quarter || 'Pregame',
+      time: game?.game_time || '0:00',
+      type,
+      description,
+      team,
+    }
+    setGameLog(prev => [...prev, entry])
+    return entry
+  }
+  
+  // Send notification to all viewers watching this game
+  function sendNotification(title, message, type = 'info') {
+    if (!game?.share_code) return
+    
+    const notification = {
+      id: Date.now(),
+      title,
+      message,
+      type, // 'score', 'turnover', 'info', 'custom'
+      timestamp: new Date().toISOString(),
+      quarter: game?.quarter,
+      gameTime: game?.game_time,
+    }
+    
+    console.log('[Notification] Sending notification:', notification)
+    
+    // Add to history
+    setNotificationHistory(prev => [...prev.slice(-19), notification])
+    
+    // Send via the game update mechanism (will be broadcast to viewers)
+    updateGame({
+      notification: notification
+    }).then(() => {
+      console.log('[Notification] Notification sent successfully')
+    }).catch(err => console.error('[Notification] Failed to send notification:', err))
+  }
+  
+  // Auto-send notification based on settings
+  function autoNotify(type, title, message) {
+    const shouldSend = {
+      'score': notificationSettings.autoScores,
+      'touchdown': notificationSettings.autoTouchdowns,
+      'turnover': notificationSettings.autoTurnovers,
+      'quarter': notificationSettings.autoQuarterEnd,
+      'halftime': notificationSettings.autoHalftime,
+      'final': notificationSettings.autoGameEnd,
+    }[type]
+    
+    if (shouldSend) {
+      sendNotification(title, message, type)
+    }
+  }
+  
+  // Format time of possession as MM:SS
+  function formatTOP(seconds) {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+  
+  // Generate halftime stats summary text
+  function generateHalftimeSummary() {
+    const awayName = game.away_team?.name || 'Away'
+    const homeName = game.home_team?.name || 'Home'
+    const awayAbbr = game.away_team?.abbreviation || 'AWY'
+    const homeAbbr = game.home_team?.abbreviation || 'HME'
+    
+    let summary = `=== HALFTIME STATS ===\n`
+    summary += `${awayName} ${game.away_score} - ${game.home_score} ${homeName}\n\n`
+    
+    summary += `SCORING BY QUARTER:\n`
+    summary += `${awayAbbr}: Q1: ${quickStats.away.q1} | Q2: ${quickStats.away.q2}\n`
+    summary += `${homeAbbr}: Q1: ${quickStats.home.q1} | Q2: ${quickStats.home.q2}\n\n`
+    
+    summary += `TEAM STATS:\n`
+    summary += `           ${awayAbbr.padEnd(6)} ${homeAbbr}\n`
+    summary += `1st Downs: ${String(quickStats.away.firstDowns).padEnd(6)} ${quickStats.home.firstDowns}\n`
+    summary += `Turnovers: ${String(quickStats.away.turnovers).padEnd(6)} ${quickStats.home.turnovers}\n`
+    summary += `Penalties: ${String(quickStats.away.penalties).padEnd(6)} ${quickStats.home.penalties}\n`
+    summary += `Pen Yards: ${String(quickStats.away.penaltyYards).padEnd(6)} ${quickStats.home.penaltyYards}\n`
+    summary += `3rd Down:  ${quickStats.away.thirdDownConv}/${quickStats.away.thirdDownAtt}    ${quickStats.home.thirdDownConv}/${quickStats.home.thirdDownAtt}\n`
+    summary += `4th Down:  ${quickStats.away.fourthDownConv}/${quickStats.away.fourthDownAtt}    ${quickStats.home.fourthDownConv}/${quickStats.home.fourthDownAtt}\n`
+    summary += `T.O.P.:    ${formatTOP(timeOfPossession.away).padEnd(6)} ${formatTOP(timeOfPossession.home)}\n`
+    
+    return summary
+  }
+  
+  // Export full game summary
+  function exportGameSummary() {
+    const awayName = game.away_team?.name || 'Away'
+    const homeName = game.home_team?.name || 'Home'
+    const awayAbbr = game.away_team?.abbreviation || 'AWY'
+    const homeAbbr = game.home_team?.abbreviation || 'HME'
+    const gameDate = game.scheduled_time ? new Date(game.scheduled_time).toLocaleDateString() : new Date().toLocaleDateString()
+    
+    let summary = `========================================\n`
+    summary += `GAME SUMMARY\n`
+    summary += `${gameDate}\n`
+    summary += `========================================\n\n`
+    
+    summary += `FINAL SCORE:\n`
+    summary += `${awayName}: ${game.away_score}\n`
+    summary += `${homeName}: ${game.home_score}\n\n`
+    
+    summary += `SCORING BY QUARTER:\n`
+    summary += `        Q1   Q2   Q3   Q4   OT   TOTAL\n`
+    summary += `${awayAbbr.padEnd(6)} ${String(quickStats.away.q1).padStart(2)}   ${String(quickStats.away.q2).padStart(2)}   ${String(quickStats.away.q3).padStart(2)}   ${String(quickStats.away.q4).padStart(2)}   ${String(quickStats.away.ot).padStart(2)}   ${String(game.away_score).padStart(3)}\n`
+    summary += `${homeAbbr.padEnd(6)} ${String(quickStats.home.q1).padStart(2)}   ${String(quickStats.home.q2).padStart(2)}   ${String(quickStats.home.q3).padStart(2)}   ${String(quickStats.home.q4).padStart(2)}   ${String(quickStats.home.ot).padStart(2)}   ${String(game.home_score).padStart(3)}\n\n`
+    
+    summary += `TEAM STATISTICS:\n`
+    summary += `                    ${awayAbbr.padEnd(8)} ${homeAbbr}\n`
+    summary += `First Downs:        ${String(quickStats.away.firstDowns).padEnd(8)} ${quickStats.home.firstDowns}\n`
+    summary += `Turnovers:          ${String(quickStats.away.turnovers).padEnd(8)} ${quickStats.home.turnovers}\n`
+    summary += `Penalties:          ${String(quickStats.away.penalties).padEnd(8)} ${quickStats.home.penalties}\n`
+    summary += `Penalty Yards:      ${String(quickStats.away.penaltyYards).padEnd(8)} ${quickStats.home.penaltyYards}\n`
+    summary += `3rd Down Conv:      ${quickStats.away.thirdDownConv}/${quickStats.away.thirdDownAtt}      ${quickStats.home.thirdDownConv}/${quickStats.home.thirdDownAtt}\n`
+    summary += `4th Down Conv:      ${quickStats.away.fourthDownConv}/${quickStats.away.fourthDownAtt}      ${quickStats.home.fourthDownConv}/${quickStats.home.fourthDownAtt}\n`
+    summary += `Time of Possession: ${formatTOP(timeOfPossession.away).padEnd(8)} ${formatTOP(timeOfPossession.home)}\n\n`
+    
+    // Custom stats
+    if (quickStats.custom?.length > 0) {
+      summary += `CUSTOM STATS:\n`
+      quickStats.custom.forEach(stat => {
+        summary += `${stat.label.padEnd(20)} ${String(stat.away).padEnd(8)} ${stat.home}\n`
+      })
+      summary += `\n`
+    }
+    
+    // Coin toss
+    if (coinToss.winner) {
+      const winner = coinToss.winner === 'home' ? homeName : awayName
+      summary += `COIN TOSS: ${winner} won, elected to ${coinToss.choice || 'N/A'}\n\n`
+    }
+    
+    // Game log
+    if (gameLog.length > 0) {
+      summary += `========================================\n`
+      summary += `PLAY-BY-PLAY LOG (${gameLog.length} entries)\n`
+      summary += `========================================\n`
+      gameLog.forEach(entry => {
+        const teamLabel = entry.team ? (entry.team === 'home' ? homeAbbr : awayAbbr) : ''
+        summary += `[${entry.quarter}] ${entry.time} - ${entry.type.toUpperCase()}${teamLabel ? ` (${teamLabel})` : ''}: ${entry.description}\n`
+      })
+    }
+    
+    return summary
+  }
+  
+  // Copy summary to clipboard
+  function copyGameSummary() {
+    const summary = exportGameSummary()
+    navigator.clipboard.writeText(summary).then(() => {
+      alert('Game summary copied to clipboard!')
+    }).catch(err => {
+      console.error('Failed to copy:', err)
+      // Fallback - show in alert
+      alert(summary)
+    })
+  }
+  
+  // Download summary as text file
+  function downloadGameSummary() {
+    const summary = exportGameSummary()
+    const blob = new Blob([summary], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `game-summary-${game.away_team?.abbreviation || 'away'}-vs-${game.home_team?.abbreviation || 'home'}-${new Date().toISOString().split('T')[0]}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   async function startGame() {
@@ -1196,21 +1468,26 @@ export default function LiveGamePage({ standalone = false }) {
     
     const nextQ = QUARTERS[currentIndex + 1]
     
+    // Get game settings with defaults
+    const quarterTime = game.quarter_length || '15:00'
+    const halftimeTime = game.halftime_length || '20:00'
+    const overtimeTime = game.overtime_length || '10:00'
+    
     // Handle special transitions
     if (nextQ === 'Q1') {
       // Starting the game from Pregame
-      await updateGame({ quarter: nextQ, game_time: '15:00' })
+      await updateGame({ quarter: nextQ, game_time: quarterTime })
       setGameStatus(null)
     } else if (nextQ === 'Halftime') {
-      // Going to halftime - set 13 min timer and show halftime status
-      await updateGame({ quarter: nextQ, game_time: '13:00' })
+      // Going to halftime - set halftime timer and show halftime status
+      await updateGame({ quarter: nextQ, game_time: halftimeTime })
       setGameStatus('halftime-show')
       stopTimer()
       setPossession(null)
       setHideDownDistance(true)
     } else if (nextQ === 'Q3') {
       // Coming out of halftime - go to Q3
-      await updateGame({ quarter: nextQ, game_time: '15:00' })
+      await updateGame({ quarter: nextQ, game_time: quarterTime })
       setGameStatus(null)
       resetTimeoutsForHalf()
     } else if (nextQ === 'OT') {
@@ -1221,27 +1498,32 @@ export default function LiveGamePage({ standalone = false }) {
         return
       }
       // Overtime - typically shorter time
-      await updateGame({ quarter: nextQ, game_time: '10:00' })
+      await updateGame({ quarter: nextQ, game_time: overtimeTime })
       setGameStatus(null)
     } else if (nextQ === 'Final') {
       // Game over
       await finalizeGame()
     } else {
       // Regular quarter change (Q1->Q2, Q3->Q4)
-      await updateGame({ quarter: nextQ, game_time: '15:00' })
+      await updateGame({ quarter: nextQ, game_time: quarterTime })
       setGameStatus(null)
     }
   }
 
   async function prevQuarter() {
+    // Get game settings with defaults
+    const quarterTime = game.quarter_length || '15:00'
+    const halftimeTime = game.halftime_length || '20:00'
+    const overtimeTime = game.overtime_length || '10:00'
+    
     // Handle extended OT periods (OT2, OT3, etc.)
     if (game.quarter?.startsWith('OT') && game.quarter !== 'OT') {
       // Go back to previous OT or OT1
       const otNum = parseInt(game.quarter.replace('OT', '')) || 2
       if (otNum > 2) {
-        await updateGame({ quarter: `OT${otNum - 1}`, game_time: '10:00' })
+        await updateGame({ quarter: `OT${otNum - 1}`, game_time: overtimeTime })
       } else {
-        await updateGame({ quarter: 'OT', game_time: '10:00' })
+        await updateGame({ quarter: 'OT', game_time: overtimeTime })
       }
       setGameStatus(null)
       return
@@ -1257,7 +1539,7 @@ export default function LiveGamePage({ standalone = false }) {
       await updateGame({ quarter: prevQ, game_time: '0:00' })
       setGameStatus('pregame')
     } else if (prevQ === 'Halftime') {
-      await updateGame({ quarter: prevQ, game_time: '13:00' })
+      await updateGame({ quarter: prevQ, game_time: halftimeTime })
       setGameStatus('halftime-show')
       setPossession(null)
       setHideDownDistance(true)
@@ -1270,7 +1552,7 @@ export default function LiveGamePage({ standalone = false }) {
       await updateGame({ quarter: prevQ })
       setGameStatus(null)
     } else {
-      await updateGame({ quarter: prevQ, game_time: '15:00' })
+      await updateGame({ quarter: prevQ, game_time: quarterTime })
       setGameStatus(null)
     }
   }
@@ -1319,6 +1601,9 @@ export default function LiveGamePage({ standalone = false }) {
     const newSeconds = Math.max(0, currentSeconds - 1)
     const newTime = formatTime(newSeconds)
     
+    // Update ref as source of truth
+    gameTimeRef.current = newTime
+    
     // Update local state only (backend calculates from timer_started_at)
     setGame(prev => prev ? { ...prev, game_time: newTime } : prev)
     
@@ -1344,19 +1629,18 @@ export default function LiveGamePage({ standalone = false }) {
       return
     }
     
-    // Handle 2-minute warning
+    // Handle 2-minute warning - auto stop clock and show 2-min warning status
     if (newSeconds === 120 && ['Q2', 'Q4'].includes(currentGame.quarter)) {
       timerRunningRef.current = false
       setTimerRunning(false)
-      setShow2MinWarningPrompt(true)
+      setGameStatus('two-minute') // Automatically show 2-min warning
       api.update(gameId, { game_time: newTime, timer_running: false }).catch(() => {})
       return
     }
     
-    // Sync to server periodically (every 5 seconds) to trigger WebSocket broadcasts
-    // Backend calculates live time from timer_started_at, so we don't send game_time
-    if (newSeconds % 5 === 0) {
-      api.update(gameId, { quarter: currentGame.quarter }).catch(() => {})
+    // Sync game_time to server every 3 seconds so viewers see updates without overloading
+    if (newSeconds % 3 === 0) {
+      api.update(gameId, { game_time: newTime }).catch(() => {})
     }
     
     // Schedule next tick
@@ -1368,10 +1652,9 @@ export default function LiveGamePage({ standalone = false }) {
   function stopTimer() {
     timerRunningRef.current = false
     setTimerRunning(false)
-    // Ignore WebSocket game_time updates for 2 seconds to prevent race conditions
-    ignoreWsTimeUntilRef.current = Date.now() + 2000
     // Save stopped state AND current time to backend
-    const currentTime = gameRef.current?.game_time || game?.game_time
+    // Use gameTimeRef as source of truth, fallback to game state
+    const currentTime = gameTimeRef.current || gameRef.current?.game_time || game?.game_time
     if (currentTime) {
       api.update(gameId, { timer_running: false, game_time: currentTime }).catch(() => {})
     } else {
@@ -1391,46 +1674,89 @@ export default function LiveGamePage({ standalone = false }) {
   // Timer adjustment functions - immediately updates time
   function adjustGameTime(seconds) {
     const currentSeconds = parseTime(game.game_time)
-    const newSeconds = Math.max(0, Math.min(900, currentSeconds + seconds)) // Max 15:00
+    const newSeconds = Math.max(0, currentSeconds + seconds) // No max cap
     const newTime = formatTime(newSeconds)
+    gameTimeRef.current = newTime // Update ref as source of truth
     setGame(prev => ({ ...prev, game_time: newTime }))
     updateGame({ game_time: newTime })
   }
 
+  // Play clock timeout ref for cleanup
+  const playClockTimeoutRef = useRef(null)
+  
   // Play clock functions
-  function startPlayClock(forceSeconds = null) {
+  function startPlayClock(forceSeconds = null, useDelay = false) {
+    // Clear any existing delay timeout first
+    if (playClockDelayTimeoutRef.current) {
+      clearTimeout(playClockDelayTimeoutRef.current)
+      playClockDelayTimeoutRef.current = null
+    }
+    
+    // Clear any existing play clock timeout
+    if (playClockTimeoutRef.current) {
+      clearTimeout(playClockTimeoutRef.current)
+      playClockTimeoutRef.current = null
+    }
+    
     if (playClockRunningRef.current) return
-    playClockRunningRef.current = true
-    setPlayClockRunning(true)
+    
+    // Set the play clock value immediately
     if (forceSeconds !== null) {
       setPlayClock(forceSeconds)
       playClockRef.current = forceSeconds
     }
-    // Tick immediately
-    doPlayClockTick()
+    
+    // If delay is enabled and we should use it, wait before starting
+    const delayMs = useDelay && playClockDelay > 0 ? playClockDelay * 1000 : 0
+    
+    if (delayMs > 0) {
+      // Start after delay, then tick immediately
+      playClockDelayTimeoutRef.current = setTimeout(() => {
+        playClockRunningRef.current = true
+        setPlayClockRunning(true)
+        doPlayClockTick()
+      }, delayMs)
+    } else {
+      // Start immediately, tick immediately (no 1 sec wait)
+      playClockRunningRef.current = true
+      setPlayClockRunning(true)
+      doPlayClockTick()
+    }
   }
   
   function doPlayClockTick() {
     if (!playClockRunningRef.current) return
     
-    setPlayClock(prev => {
-      const newSeconds = Math.max(0, prev - 1)
-      playClockRef.current = newSeconds // Keep ref in sync
-      if (newSeconds <= 0) {
-        playClockRunningRef.current = false
-        setPlayClockRunning(false)
-        return 0
-      }
-      return newSeconds
-    })
+    // Read current value from ref (source of truth)
+    const currentSeconds = playClockRef.current
+    const newSeconds = Math.max(0, currentSeconds - 1)
     
-    // Schedule next tick outside state update
-    if (playClockRunningRef.current) {
-      setTimeout(doPlayClockTick, 1000)
+    // Update both ref and state
+    playClockRef.current = newSeconds
+    setPlayClock(newSeconds)
+    
+    if (newSeconds <= 0) {
+      playClockRunningRef.current = false
+      setPlayClockRunning(false)
+      playClockTimeoutRef.current = null
+      return
     }
+    
+    // Schedule next tick only if still running
+    playClockTimeoutRef.current = setTimeout(doPlayClockTick, 1000)
   }
 
   function stopPlayClock() {
+    // Clear any pending delay timeout
+    if (playClockDelayTimeoutRef.current) {
+      clearTimeout(playClockDelayTimeoutRef.current)
+      playClockDelayTimeoutRef.current = null
+    }
+    // Clear any pending play clock timeout
+    if (playClockTimeoutRef.current) {
+      clearTimeout(playClockTimeoutRef.current)
+      playClockTimeoutRef.current = null
+    }
     playClockRunningRef.current = false
     setPlayClockRunning(false)
   }
@@ -1442,7 +1768,7 @@ export default function LiveGamePage({ standalone = false }) {
   }
 
   function adjustPlayClock(seconds) {
-    const newSeconds = Math.max(0, Math.min(99, playClock + seconds))
+    const newSeconds = Math.max(0, Math.min(99, playClockRef.current + seconds))
     setPlayClock(newSeconds)
     playClockRef.current = newSeconds
   }
@@ -1524,14 +1850,7 @@ export default function LiveGamePage({ standalone = false }) {
       setTimeoutTeam('home')
       setShowTimeoutDisplay(true)
       setPendingTimeoutDuration('home')
-      // Auto-hide timeout overlay after 5-10 seconds (min 5, max 10)
-      setTimeout(() => {
-        setShowTimeoutDisplay(false)
-      }, 5000) // Min 5 seconds
-      setTimeout(() => {
-        setShowTimeoutDisplay(false)
-        setTimeoutTeam(null)
-      }, 10000) // Max 10 seconds - force hide
+      // Overlay stays visible until endTimeout is called or timeout clock finishes
     } else if (team === 'away' && awayTimeouts > 0) {
       const usedIndex = awayTimeouts // The timeout being used (before decrement)
       setUsedTimeoutIndex(usedIndex)
@@ -1542,14 +1861,7 @@ export default function LiveGamePage({ standalone = false }) {
       setTimeoutTeam('away')
       setShowTimeoutDisplay(true)
       setPendingTimeoutDuration('away')
-      // Auto-hide timeout overlay after 5-10 seconds (min 5, max 10)
-      setTimeout(() => {
-        setShowTimeoutDisplay(false)
-      }, 5000) // Min 5 seconds
-      setTimeout(() => {
-        setShowTimeoutDisplay(false)
-        setTimeoutTeam(null)
-      }, 10000) // Max 10 seconds - force hide
+      // Overlay stays visible until endTimeout is called or timeout clock finishes
     }
   }
 
@@ -1827,8 +2139,7 @@ export default function LiveGamePage({ standalone = false }) {
   // Stage 1: Show just "FLAG" text on display
   function showFlagStage1() {
     setFlagDisplayStage(1)
-    // Stop game clock and play clock when flag is thrown
-    stopTimer()
+    // Hide play clock when flag is thrown (but don't stop game clock)
     setShowPlayClock(false)
   }
 
@@ -2352,6 +2663,85 @@ export default function LiveGamePage({ standalone = false }) {
                   </Button>
                 </div>
               </div>
+              
+              {/* Share via Email/SMS */}
+              <div className="space-y-2">
+                <Label>Share via</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const shareUrl = `${window.location.origin}/share/game/${game.share_code}`
+                      const subject = encodeURIComponent(`Watch: ${game.away_team?.name || 'Away'} vs ${game.home_team?.name || 'Home'}`)
+                      const body = encodeURIComponent(`Watch the game live!\n\nGame: ${game.away_team?.name || 'Away'} vs ${game.home_team?.name || 'Home'}\nShare Code: ${game.share_code}\n\nWatch here: ${shareUrl}`)
+                      window.open(`mailto:?subject=${subject}&body=${body}`, '_blank')
+                    }}
+                  >
+                    📧 Email
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      const shareUrl = `${window.location.origin}/share/game/${game.share_code}`
+                      const message = encodeURIComponent(`Watch the game live! ${game.away_team?.name || 'Away'} vs ${game.home_team?.name || 'Home'}\n\nCode: ${game.share_code}\n${shareUrl}`)
+                      // Try SMS on mobile, fallback to copy
+                      if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+                        window.open(`sms:?body=${message}`, '_blank')
+                      } else {
+                        navigator.clipboard.writeText(decodeURIComponent(message))
+                        setCopied(true)
+                        setTimeout(() => setCopied(false), 2000)
+                      }
+                    }}
+                  >
+                    💬 Text/SMS
+                  </Button>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 text-xs"
+                    onClick={() => {
+                      const shareUrl = `${window.location.origin}/share/game/${game.share_code}`
+                      const text = encodeURIComponent(`Watch: ${game.away_team?.name || 'Away'} vs ${game.home_team?.name || 'Home'} 🏈`)
+                      window.open(`https://twitter.com/intent/tweet?text=${text}&url=${encodeURIComponent(shareUrl)}`, '_blank', 'width=550,height=420')
+                    }}
+                  >
+                    𝕏 Twitter
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 text-xs"
+                    onClick={() => {
+                      const shareUrl = `${window.location.origin}/share/game/${game.share_code}`
+                      window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank', 'width=550,height=420')
+                    }}
+                  >
+                    📘 Facebook
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 text-xs"
+                    onClick={() => {
+                      const shareUrl = `${window.location.origin}/share/game/${game.share_code}`
+                      const text = encodeURIComponent(`Watch: ${game.away_team?.name || 'Away'} vs ${game.home_team?.name || 'Home'} 🏈 ${shareUrl}`)
+                      window.open(`https://wa.me/?text=${text}`, '_blank')
+                    }}
+                  >
+                    💚 WhatsApp
+                  </Button>
+                </div>
+              </div>
+              
+              {/* QR Code hint */}
+              <div className="text-center text-xs text-slate-500 pt-2 border-t">
+                <p>Viewers can watch the game live with automatic updates</p>
+              </div>
             </div>
           </DialogContent>
         </Dialog>
@@ -2422,12 +2812,12 @@ export default function LiveGamePage({ standalone = false }) {
               <div className="flex items-center justify-center gap-2">
                 {[
                   { value: 'Pregame', label: 'Pre', time: '0:00' },
-                  { value: 'Q1', label: 'Q1', time: '15:00' },
-                  { value: 'Q2', label: 'Q2', time: '15:00' },
-                  { value: 'Halftime', label: 'Half', time: '13:00' },
-                  { value: 'Q3', label: 'Q3', time: '15:00' },
-                  { value: 'Q4', label: 'Q4', time: '15:00' },
-                  { value: 'OT', label: 'OT', time: '10:00' },
+                  { value: 'Q1', label: 'Q1', time: game.quarter_length || '15:00' },
+                  { value: 'Q2', label: 'Q2', time: game.quarter_length || '15:00' },
+                  { value: 'Halftime', label: 'Half', time: game.halftime_length || '20:00' },
+                  { value: 'Q3', label: 'Q3', time: game.quarter_length || '15:00' },
+                  { value: 'Q4', label: 'Q4', time: game.quarter_length || '15:00' },
+                  { value: 'OT', label: 'OT', time: game.overtime_length || '10:00' },
                   { value: 'Final', label: 'Final', time: '0:00' },
                 ].map(q => (
                   <Button
@@ -2707,6 +3097,7 @@ export default function LiveGamePage({ standalone = false }) {
               showFirstDown={showFirstDown}
               showIncomplete={showIncomplete}
               showOutOfBounds={showOutOfBounds}
+              show3AndOut={show3AndOut}
               showTurnoverOnDowns={showTurnoverOnDowns}
               showTurnover={showTurnover}
               showFumbleRecovery={showFumbleRecovery}
@@ -2741,9 +3132,12 @@ export default function LiveGamePage({ standalone = false }) {
               showInjury={showInjury}
               extraInfo={extraInfo}
               hidePossession={hidePossession}
+              hidePossessionOutline={hidePossessionOutline}
               hideClock={hideClock}
               displayStats={displayStats}
               quickStats={quickStats}
+              showCoinToss={showCoinToss}
+              coinTossData={coinToss}
             />
           </CardContent>
         </Card>
@@ -3167,17 +3561,20 @@ export default function LiveGamePage({ standalone = false }) {
                       const currentIndex = QUARTERS.indexOf(game.quarter)
                       const nextQ = QUARTERS[currentIndex + 1]
                       
+                      const quarterTime = game.quarter_length || '15:00'
+                      const halftimeTime = game.halftime_length || '20:00'
+                      
                       if (nextQ === 'Halftime') {
                         // Update time and quarter together
-                        setGame(prev => ({ ...prev, game_time: '13:00', quarter: 'Halftime' }))
-                        await updateGame({ game_time: '13:00', quarter: 'Halftime' })
+                        setGame(prev => ({ ...prev, game_time: halftimeTime, quarter: 'Halftime' }))
+                        await updateGame({ game_time: halftimeTime, quarter: 'Halftime' })
                         setGameStatus('halftime-show')
                         setPossession(null)
                         setHideDownDistance(true)
                       } else if (nextQ) {
                         // Update time and quarter together
-                        setGame(prev => ({ ...prev, game_time: '15:00', quarter: nextQ }))
-                        await updateGame({ game_time: '15:00', quarter: nextQ })
+                        setGame(prev => ({ ...prev, game_time: quarterTime, quarter: nextQ }))
+                        await updateGame({ game_time: quarterTime, quarter: nextQ })
                         setGameStatus(null)
                       }
                     }}
@@ -3243,6 +3640,30 @@ export default function LiveGamePage({ standalone = false }) {
                   >
                     {showPlayClock ? 'Hide' : 'Show'}
                   </Button>
+                </div>
+                
+                {/* Start Delay Setting */}
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-slate-600 dark:text-slate-400 whitespace-nowrap">Start Delay:</span>
+                  <div className="flex items-center gap-1">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="h-7 w-7 p-0"
+                      onClick={() => setPlayClockDelay(prev => Math.max(0, prev - 1))}
+                    >
+                      -
+                    </Button>
+                    <span className="w-8 text-center font-mono">{playClockDelay}s</span>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="h-7 w-7 p-0"
+                      onClick={() => setPlayClockDelay(prev => Math.min(10, prev + 1))}
+                    >
+                      +
+                    </Button>
+                  </div>
                 </div>
                 
                 {/* Delay of Game and Timeout options - appears when play clock is 0 */}
@@ -3517,16 +3938,28 @@ export default function LiveGamePage({ standalone = false }) {
                 >
                   {possession === null ? "No Possession ✓" : "No Possession"}
                 </button>
-                <button
-                  className={`w-full mt-2 py-1.5 px-2 rounded-lg border-2 transition-all text-xs font-bold ${
-                    hidePossession 
-                      ? 'bg-purple-600 border-purple-600 text-white ring-2 ring-purple-400' 
-                      : 'bg-transparent border-purple-400 text-purple-600 dark:text-purple-400 opacity-60 hover:opacity-100'
-                  }`}
-                  onClick={() => setHidePossession(!hidePossession)}
-                >
-                  {hidePossession ? "Show Possession 🏈" : "Hide Possession 🏈"}
-                </button>
+                <div className="flex gap-1 mt-2">
+                  <button
+                    className={`flex-1 py-1.5 px-2 rounded-lg border-2 transition-all text-xs font-bold ${
+                      hidePossession 
+                        ? 'bg-purple-600 border-purple-600 text-white ring-2 ring-purple-400' 
+                        : 'bg-transparent border-purple-400 text-purple-600 dark:text-purple-400 opacity-60 hover:opacity-100'
+                    }`}
+                    onClick={() => setHidePossession(!hidePossession)}
+                  >
+                    {hidePossession ? "Show All" : "Hide All"}
+                  </button>
+                  <button
+                    className={`flex-1 py-1.5 px-2 rounded-lg border-2 transition-all text-xs font-bold ${
+                      hidePossessionOutline 
+                        ? 'bg-green-600 border-green-600 text-white ring-2 ring-green-400' 
+                        : 'bg-transparent border-green-400 text-green-600 dark:text-green-400 opacity-60 hover:opacity-100'
+                    }`}
+                    onClick={() => setHidePossessionOutline(!hidePossessionOutline)}
+                  >
+                    {hidePossessionOutline ? "Show Ring" : "Hide Ring"}
+                  </button>
+                </div>
               </div>
             </div>
             
@@ -3540,16 +3973,18 @@ export default function LiveGamePage({ standalone = false }) {
                   resetDowns()
                   if (!playClockRunning) {
                     setPlayClock(40)
-                    startPlayClock(40)
+                    startPlayClock(40, true)
                   }
                   setShowDownOnly(false)
                   setShowFirstDown(true)
                   setTimeout(() => setShowFirstDown(false), 3000)
-                  // Track first down in quick stats
-                  setQuickStats(s => ({
-                    ...s,
-                    [possession]: {...s[possession], firstDowns: s[possession].firstDowns + 1}
-                  }))
+                  // Track first down in quick stats (only if possession is set)
+                  if (possession && (possession === 'home' || possession === 'away')) {
+                    setQuickStats(s => ({
+                      ...s,
+                      [possession]: {...s[possession], firstDowns: (s[possession]?.firstDowns || 0) + 1}
+                    }))
+                  }
                 }}
               >
                 ⬇️ First Down!
@@ -3564,7 +3999,7 @@ export default function LiveGamePage({ standalone = false }) {
                   onClick={() => {
                     if (!playClockRunning) {
                       setPlayClock(40)
-                      startPlayClock(40)
+                      startPlayClock(40, true)
                     }
                     setShowDownOnly(true)
                     nextDown()
@@ -3652,7 +4087,7 @@ export default function LiveGamePage({ standalone = false }) {
                     stopTimer()
                     if (!playClockRunning) {
                       setPlayClock(40)
-                      startPlayClock(40)
+                      startPlayClock(40, true)
                     }
                     nextDown()
                     setShowIncomplete(true)
@@ -3670,7 +4105,7 @@ export default function LiveGamePage({ standalone = false }) {
                     // Out of Bounds: stops game clock, resets and starts play clock, advances down, shows down only
                     stopTimer()
                     setPlayClock(40)
-                    startPlayClock(40)
+                    startPlayClock(40, true)
                     nextDown()
                     setShowDownOnly(true)
                     setShowOutOfBounds(true)
@@ -3697,6 +4132,118 @@ export default function LiveGamePage({ standalone = false }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Coin Toss - Pregame or OT */}
+            {(game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && !coinToss.winner && (
+              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">🪙 Coin Toss</p>
+                <div className="space-y-2">
+                  <p className="text-xs text-amber-700 dark:text-amber-400">Who won the toss?</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button 
+                      size="sm"
+                      variant={coinToss.winner === 'away' ? "default" : "outline"}
+                      className={coinToss.winner === 'away' ? "bg-amber-600" : "border-amber-400 text-amber-700 dark:text-amber-400"}
+                      onClick={() => setCoinToss(prev => ({ ...prev, winner: 'away' }))}
+                    >
+                      {game.away_team?.abbreviation || 'Away'}
+                    </Button>
+                    <Button 
+                      size="sm"
+                      variant={coinToss.winner === 'home' ? "default" : "outline"}
+                      className={coinToss.winner === 'home' ? "bg-amber-600" : "border-amber-400 text-amber-700 dark:text-amber-400"}
+                      onClick={() => setCoinToss(prev => ({ ...prev, winner: 'home' }))}
+                    >
+                      {game.home_team?.abbreviation || 'Home'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Coin Toss Choice - After winner selected */}
+            {(game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && coinToss.winner && !coinToss.choice && (
+              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                  🪙 {coinToss.winner === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation} won - Election?
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  <Button 
+                    size="sm"
+                    className="bg-green-600 hover:bg-green-700"
+                    onClick={() => {
+                      setCoinToss(prev => ({ ...prev, choice: 'receive' }))
+                      setShowCoinToss(true)
+                      setTimeout(() => setShowCoinToss(false), 5000)
+                    }}
+                  >
+                    📥 Receive
+                  </Button>
+                  <Button 
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700"
+                    onClick={() => {
+                      setCoinToss(prev => ({ ...prev, choice: 'kick' }))
+                      setShowCoinToss(true)
+                      setTimeout(() => setShowCoinToss(false), 5000)
+                    }}
+                  >
+                    🦵 Kick
+                  </Button>
+                  <Button 
+                    size="sm"
+                    className="bg-purple-600 hover:bg-purple-700"
+                    onClick={() => {
+                      setCoinToss(prev => ({ ...prev, choice: 'defer' }))
+                      setShowCoinToss(true)
+                      setTimeout(() => setShowCoinToss(false), 5000)
+                    }}
+                  >
+                    ⏳ Defer
+                  </Button>
+                </div>
+                <Button 
+                  size="sm"
+                  variant="ghost"
+                  className="w-full text-xs text-amber-600 hover:text-amber-700"
+                  onClick={() => setCoinToss({ winner: null, choice: null })}
+                >
+                  ← Change Winner
+                </Button>
+              </div>
+            )}
+
+            {/* Coin Toss Complete - Show result */}
+            {(game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && coinToss.winner && coinToss.choice && (
+              <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-green-800 dark:text-green-300">
+                    🪙 {coinToss.winner === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation} won → {coinToss.choice === 'receive' ? '📥 Receive' : coinToss.choice === 'kick' ? '🦵 Kick' : '⏳ Defer'}
+                  </p>
+                  <div className="flex gap-1">
+                    <Button 
+                      size="sm"
+                      variant={showCoinToss ? "default" : "outline"}
+                      className={`h-7 text-xs ${showCoinToss ? "bg-amber-500 hover:bg-amber-600" : "border-amber-400"}`}
+                      onClick={() => setShowCoinToss(!showCoinToss)}
+                    >
+                      {showCoinToss ? '📺 Hide' : '📺 Show'}
+                    </Button>
+                    <Button 
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-slate-400 hover:text-red-500"
+                      onClick={() => {
+                        setCoinToss({ winner: null, choice: null })
+                        setShowCoinToss(false)
+                      }}
+                    >
+                      ✕
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Start Game - Pregame only */}
             {(game.quarter === 'Pregame' || gameStatus === 'pregame') && (
               <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg space-y-2">
@@ -3705,7 +4252,7 @@ export default function LiveGamePage({ standalone = false }) {
                   className="w-full bg-green-600 hover:bg-green-700"
                   onClick={() => {
                     // Set to Q1, kickoff, and update game
-                    updateGame({ quarter: 'Q1', game_time: '15:00' })
+                    updateGame({ quarter: 'Q1', game_time: game.quarter_length || '15:00' })
                     setGameStatus('kickoff')
                     setDown(1)
                     setDistance(10)
@@ -4028,34 +4575,6 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
             )}
             
-            {/* Two-Minute Warning Prompt */}
-            {show2MinWarningPrompt && (
-              <div className="p-3 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg space-y-2">
-                <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-300">⏱️ Two-Minute Warning?</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button 
-                    className="bg-yellow-600 hover:bg-yellow-700"
-                    onClick={() => {
-                      setShow2MinWarningPrompt(false)
-                      setGameStatus('two-minute')
-                    }}
-                  >
-                    ⏱️ 2-Min Warning
-                  </Button>
-                  <Button 
-                    variant="outline"
-                    className="border-yellow-400 text-yellow-700 dark:text-yellow-400"
-                    onClick={() => {
-                      setShow2MinWarningPrompt(false)
-                      startTimer()
-                    }}
-                  >
-                    Skip
-                  </Button>
-                </div>
-              </div>
-            )}
-            
             {/* OT Score - End Game Prompt */}
             {showOTEndPrompt && (
               <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg space-y-2">
@@ -4147,6 +4666,26 @@ export default function LiveGamePage({ standalone = false }) {
                     ✗ No Good
                   </Button>
                   <Button 
+                    className="bg-pink-600 hover:bg-pink-700"
+                    onClick={() => {
+                      setPatResult('doink')
+                      setTimeout(() => {
+                        setShowPATAttempt(null)
+                        setPatResult(null)
+                        if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                          setShowOTEndPrompt(true)
+                        } else {
+                          setKickoffPending(true)
+                          setShowAdBreakPrompt(true)
+                          setPossession(null)
+                          setShowPlayClock(false)
+                        }
+                      }, 2500)
+                    }}
+                  >
+                    🎯 Doink!
+                  </Button>
+                  <Button 
                     className="bg-purple-600 hover:bg-purple-700"
                     onClick={() => {
                       // Faked - close PAT attempt and resume play
@@ -4158,6 +4697,61 @@ export default function LiveGamePage({ standalone = false }) {
                   >
                     🎭 Faked
                   </Button>
+                  <Button 
+                    className="bg-orange-600 hover:bg-orange-700"
+                    onClick={() => {
+                      setPatResult('blocked')
+                      setTimeout(() => {
+                        setShowPATAttempt(null)
+                        setPatResult(null)
+                        // Check if in OT - show end game prompt
+                        if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                          setShowOTEndPrompt(true)
+                        } else {
+                          setKickoffPending(true)
+                          setShowAdBreakPrompt(true)
+                          setPossession(null)
+                          setShowPlayClock(false)
+                        }
+                      }, 2000)
+                    }}
+                  >
+                    🚫 Blocked
+                  </Button>
+                  <Button 
+                    className="bg-cyan-600 hover:bg-cyan-700"
+                    onClick={() => {
+                      // Blocked and returned for score by defense
+                      const defenseTeam = (possession || 'home') === 'home' ? 'away' : 'home'
+                      const points = showPATAttempt === 'pat' ? 6 : 2 // Pick 6 for PAT, Pick 2 for 2PT
+                      updateScore(defenseTeam, points)
+                      setPatResult('blocked-return')
+                      setTimeout(() => {
+                        setShowPATAttempt(null)
+                        setPatResult(null)
+                        if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                          setShowOTEndPrompt(true)
+                        } else {
+                          setKickoffPending(true)
+                          setShowAdBreakPrompt(true)
+                          setPossession(null)
+                          setShowPlayClock(false)
+                        }
+                      }, 3000)
+                    }}
+                  >
+                    {showPATAttempt === 'pat' ? '🏈 Pick 6' : '🏈 Pick 2'}
+                  </Button>
+                  <Button 
+                    className="bg-yellow-500 hover:bg-yellow-600 text-black"
+                    onClick={() => {
+                      setShowPATAttempt(null)
+                      setPatResult(null)
+                      showFlagStage1()
+                    }}
+                  >
+                    🚩 Penalty
+                  </Button>
                 </div>
               </div>
             )}
@@ -4167,25 +4761,31 @@ export default function LiveGamePage({ standalone = false }) {
               <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg space-y-2">
                 <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">
                   Field Goal Attempt ({fgDistance} yards)
+                  {game.four_point_fg_enabled && fgDistance >= (game.four_point_fg_distance || 50) && (
+                    <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full">4 PT RANGE</span>
+                  )}
                 </p>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
                       setFgResult('good')
+                      stopTimer() // Stop clock after FG result
                       const scoringTeam = possession || 'home'
                       const distance = fgDistance
-                      updateScore(scoringTeam, 3, { distance })
+                      // Check if 4-point FG is enabled and distance qualifies
+                      const points = game.four_point_fg_enabled && fgDistance >= (game.four_point_fg_distance || 50) ? 4 : 3
+                      updateScore(scoringTeam, points, { distance })
                       setTimeout(() => {
                         setShowFGAttempt(false)
                         setFgResult(null)
                         setScoreCelebration(null)
-                        togglePossession()
                         // Check if in OT - show end game prompt
                         if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
                           setShowOTEndPrompt(true)
                         } else {
                           setKickoffPending(true)
+                          setKickingTeam(scoringTeam) // Scoring team kicks off
                           setShowAdBreakPrompt(true)
                           setPossession(null)
                           setShowPlayClock(false)
@@ -4194,12 +4794,13 @@ export default function LiveGamePage({ standalone = false }) {
                       }, 5000)
                     }}
                   >
-                    ✓ Good
+                    ✓ Good {game.four_point_fg_enabled && fgDistance >= (game.four_point_fg_distance || 50) ? '(4 PT)' : ''}
                   </Button>
                   <Button 
                     className="bg-red-600 hover:bg-red-700"
                     onClick={() => {
                       setFgResult('no-good')
+                      stopTimer() // Stop clock after FG result
                       setTimeout(() => {
                         setShowFGAttempt(false)
                         setFgResult(null)
@@ -4208,6 +4809,20 @@ export default function LiveGamePage({ standalone = false }) {
                     }}
                   >
                     ✗ No Good
+                  </Button>
+                  <Button 
+                    className="bg-pink-600 hover:bg-pink-700"
+                    onClick={() => {
+                      setFgResult('doink')
+                      stopTimer() // Stop clock after FG result
+                      setTimeout(() => {
+                        setShowFGAttempt(false)
+                        setFgResult(null)
+                        togglePossession()
+                      }, 3500)
+                    }}
+                  >
+                    🎯 Doink!
                   </Button>
                   <Button 
                     className="bg-purple-600 hover:bg-purple-700"
@@ -4220,6 +4835,33 @@ export default function LiveGamePage({ standalone = false }) {
                     }}
                   >
                     🎭 Faked
+                  </Button>
+                  <Button 
+                    className="bg-orange-600 hover:bg-orange-700"
+                    onClick={() => {
+                      setFgResult('blocked')
+                      stopTimer() // Stop clock after FG result
+                      setTimeout(() => {
+                        setShowFGAttempt(false)
+                        setFgResult(null)
+                        togglePossession()
+                      }, 3000)
+                    }}
+                  >
+                    🚫 Blocked
+                  </Button>
+                  <Button 
+                    className="bg-cyan-600 hover:bg-cyan-700"
+                    onClick={() => {
+                      // Blocked and returned for TD by defense
+                      const defenseTeam = (possession || 'home') === 'home' ? 'away' : 'home'
+                      setShowFGAttempt(false)
+                      setFgResult(null)
+                      // Show TD panel for the blocking team
+                      setShowTDPanel(defenseTeam)
+                    }}
+                  >
+                    🏈 Pick 6
                   </Button>
                   <Button 
                     className="bg-yellow-500 hover:bg-yellow-600 text-black"
@@ -4332,27 +4974,47 @@ export default function LiveGamePage({ standalone = false }) {
                     🔍 Review
                   </Button>
                 </div>
-                {/* Touchback option for interceptions */}
+                {/* Touchback and Pick 6 options for interceptions */}
                 {pendingTurnoverReview === 'interception' && (
-                  <Button 
-                    className="w-full bg-blue-600 hover:bg-blue-700 mt-2"
-                    onClick={() => {
-                      togglePossession()
-                      setPendingTurnoverReview(null)
-                      setShowTurnover(null)
-                      setShowTouchback(true)
-                      setTimeout(() => { 
-                        setShowTouchback(false)
-                        if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
-                          setShowOTEndPrompt(true)
-                        } else {
-                          setShowAdBreakPrompt(true)
-                        }
-                      }, 5000)
-                    }}
-                  >
-                    🏈 Touchback
-                  </Button>
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <Button 
+                      className="bg-blue-600 hover:bg-blue-700"
+                      onClick={() => {
+                        togglePossession()
+                        setPendingTurnoverReview(null)
+                        setShowTurnover(null)
+                        setShowTouchback(true)
+                        setTimeout(() => { 
+                          setShowTouchback(false)
+                          if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                            setShowOTEndPrompt(true)
+                          } else {
+                            setShowAdBreakPrompt(true)
+                          }
+                        }, 5000)
+                      }}
+                    >
+                      🏈 Touchback
+                    </Button>
+                    <Button 
+                      className="bg-purple-600 hover:bg-purple-700"
+                      onClick={() => {
+                        // Pick 6 - defense scores TD
+                        const scoringTeam = possession === 'home' ? 'away' : 'home'
+                        setPendingTurnoverReview(null)
+                        setShowTurnover(null)
+                        // Track turnover
+                        setQuickStats(s => ({
+                          ...s,
+                          [possession]: {...s[possession], turnovers: s[possession].turnovers + 1}
+                        }))
+                        // Show TD panel for the intercepting team
+                        setShowTDPanel(scoringTeam)
+                      }}
+                    >
+                      🏈 Pick 6
+                    </Button>
+                  </div>
                 )}
               </div>
             )}
@@ -4395,6 +5057,25 @@ export default function LiveGamePage({ standalone = false }) {
                     🔍 Review
                   </Button>
                 </div>
+                {/* Scoop & Score option */}
+                <Button 
+                  className="w-full bg-purple-600 hover:bg-purple-700"
+                  onClick={() => {
+                    // Scoop & Score - defense recovers and scores TD
+                    const scoringTeam = possession === 'home' ? 'away' : 'home'
+                    setPendingTurnoverReview(null)
+                    setShowTurnover(null)
+                    // Track turnover
+                    setQuickStats(s => ({
+                      ...s,
+                      [possession]: {...s[possession], turnovers: s[possession].turnovers + 1}
+                    }))
+                    // Show TD panel for the recovering team
+                    setShowTDPanel(scoringTeam)
+                  }}
+                >
+                  🏈 Scoop & Score
+                </Button>
               </div>
             )}
             
@@ -4481,7 +5162,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-orange-800 dark:text-orange-300">
                   {kickingTeam === 'home' ? game.home_team.abbreviation : game.away_team.abbreviation} is kicking - What type?
                 </p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <Button 
                     className="bg-blue-600 hover:bg-blue-700 text-white"
                     onClick={() => {
@@ -4504,6 +5185,25 @@ export default function LiveGamePage({ standalone = false }) {
                   >
                     🎯 Onside Kick
                   </Button>
+                  <Button 
+                    className="bg-purple-600 hover:bg-purple-700 text-white"
+                    onClick={() => {
+                      setKickoffPending(false)
+                      setScoreCelebration(null)
+                      setShowAdBreakPrompt(false)
+                      // Set 4th & distance from league settings, from own 25
+                      const altDistance = game.onside_alt_distance || 15
+                      setDown(4)
+                      setDistance(altDistance)
+                      setBallOn(25)
+                      setPossession(kickingTeam)
+                      setGoingForIt(true)
+                      setKickingTeam(null)
+                      setGameStatus(null)
+                    }}
+                  >
+                    🎲 4th & {game.onside_alt_distance || 15}
+                  </Button>
                 </div>
                 <Button 
                   variant="outline"
@@ -4520,11 +5220,13 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
             )}
             
-            {/* Kickoff button after score - normal flow or after choosing regular kickoff */}
-            {kickoffPending && (gameStatus === 'kickoff-choice' || !(game.quarter === 'Q4' && kickingTeam && (
-              (kickingTeam === 'home' && game.home_score <= game.away_score) ||
-              (kickingTeam === 'away' && game.away_score <= game.home_score)
-            ))) && (
+            {/* Kickoff button after score - normal flow (skip if Q4 onside kick choice is showing) */}
+            {kickoffPending && (!gameStatus || gameStatus === 'kickoff-choice') && !(
+              game.quarter === 'Q4' && kickingTeam && !gameStatus && (
+                (kickingTeam === 'home' && game.home_score <= game.away_score) ||
+                (kickingTeam === 'away' && game.away_score <= game.home_score)
+              )
+            ) && (
               <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg space-y-2">
                 <p className="text-sm font-semibold text-green-800 dark:text-green-300">Who receives the kickoff?</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -4583,18 +5285,21 @@ export default function LiveGamePage({ standalone = false }) {
                     const currentIndex = QUARTERS.indexOf(game.quarter)
                     const nextQ = QUARTERS[currentIndex + 1]
                     
+                    const quarterTime = game.quarter_length || '15:00'
+                    const halftimeTime = game.halftime_length || '20:00'
+                    
                     if (nextQ === 'Halftime') {
                       // Update time and quarter together
-                      setGame(prev => ({ ...prev, game_time: '13:00', quarter: 'Halftime' }))
-                      await updateGame({ game_time: '13:00', quarter: 'Halftime' })
+                      setGame(prev => ({ ...prev, game_time: halftimeTime, quarter: 'Halftime' }))
+                      await updateGame({ game_time: halftimeTime, quarter: 'Halftime' })
                       setGameStatus('halftime-show')
                       setPossession(null)
                       setHideDownDistance(true)
                       setHideTimeouts(true)
                     } else if (nextQ) {
                       // Update time and quarter together
-                      setGame(prev => ({ ...prev, game_time: '15:00', quarter: nextQ }))
-                      await updateGame({ game_time: '15:00', quarter: nextQ })
+                      setGame(prev => ({ ...prev, game_time: quarterTime, quarter: nextQ }))
+                      await updateGame({ game_time: quarterTime, quarter: nextQ })
                       setGameStatus(null)
                     }
                   }}
@@ -4706,14 +5411,47 @@ export default function LiveGamePage({ standalone = false }) {
                   <Button 
                     className="bg-amber-600 hover:bg-amber-700"
                     onClick={() => {
-                      // Will show kickoff receiver selection
+                      // Go to OT - set quarter to OT and show kickoff selection
+                      updateGame({ quarter: 'OT', game_time: game.quarter_length || '15:00' })
+                      setGameStatus(null)
+                      setKickoffPending(true)
+                      setShowAdBreakPrompt(true)
+                      setPossession(null)
+                      setHideDownDistance(true)
                     }}
-                    disabled
                   >
-                    ⏱️ Go to OT ↓
+                    ⏱️ Go to OT
                   </Button>
                 </div>
-                <p className="text-xs text-amber-700 dark:text-amber-400">Or select who receives the OT kickoff below</p>
+                <p className="text-xs text-amber-700 dark:text-amber-400">Select who receives the OT kickoff:</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button 
+                    className="text-white"
+                    style={{ backgroundColor: game.away_team?.color }}
+                    onClick={() => {
+                      updateGame({ quarter: 'OT', game_time: game.quarter_length || '15:00' })
+                      setGameStatus('kickoff')
+                      setKickoffReceiver('away')
+                      setPossession(null)
+                      setHideDownDistance(true)
+                    }}
+                  >
+                    {game.away_team?.abbreviation} receives
+                  </Button>
+                  <Button 
+                    className="text-white"
+                    style={{ backgroundColor: game.home_team?.color }}
+                    onClick={() => {
+                      updateGame({ quarter: 'OT', game_time: game.quarter_length || '15:00' })
+                      setGameStatus('kickoff')
+                      setKickoffReceiver('home')
+                      setPossession(null)
+                      setHideDownDistance(true)
+                    }}
+                  >
+                    {game.home_team?.abbreviation} receives
+                  </Button>
+                </div>
               </div>
             )}
             
@@ -4842,6 +5580,19 @@ export default function LiveGamePage({ standalone = false }) {
                     🏃 Return
                   </Button>
                   <Button 
+                    className="bg-cyan-600 hover:bg-cyan-700"
+                    onClick={() => {
+                      // Kickoff return TD
+                      setGameStatus(null)
+                      setShowKickoffChoice(false)
+                      stopTimer()
+                      setShowTDPanel(kickoffReceiver)
+                      setKickoffReceiver(null)
+                    }}
+                  >
+                    🏈 Return TD
+                  </Button>
+                  <Button 
                     className="bg-slate-600 hover:bg-slate-700"
                     onClick={() => {
                       setGameStatus(null)
@@ -4892,6 +5643,34 @@ export default function LiveGamePage({ standalone = false }) {
                     }}
                   >
                     ⚫ Dead Ball
+                  </Button>
+                  <Button 
+                    className="bg-red-600 hover:bg-red-700"
+                    onClick={() => {
+                      // Fumble on kickoff return - show fumble recovery options
+                      setGameStatus(null)
+                      stopTimer()
+                      setShowKickoffChoice(false)
+                      setPossession(kickoffReceiver) // Set initial possession to returner
+                      setKickoffReceiver(null)
+                      setPendingFumble(true) // Show fumble recovery panel
+                    }}
+                  >
+                    🏈💨 Fumble
+                  </Button>
+                  <Button 
+                    className="bg-pink-600 hover:bg-pink-700"
+                    onClick={() => {
+                      // Fumble returned for TD by kicking team
+                      const kickingTeam = kickoffReceiver === 'home' ? 'away' : 'home'
+                      setGameStatus(null)
+                      stopTimer()
+                      setShowKickoffChoice(false)
+                      setKickoffReceiver(null)
+                      setShowTDPanel(kickingTeam)
+                    }}
+                  >
+                    🏈 Fumble TD
                   </Button>
                 </div>
               </div>
@@ -5009,6 +5788,18 @@ export default function LiveGamePage({ standalone = false }) {
                     🏃 Return
                   </Button>
                   <Button 
+                    className="bg-cyan-600 hover:bg-cyan-700"
+                    onClick={() => {
+                      // Punt return TD - receiving team scores
+                      const receivingTeam = possession === 'home' ? 'away' : 'home'
+                      setGameStatus(null)
+                      stopTimer()
+                      setShowTDPanel(receivingTeam)
+                    }}
+                  >
+                    🏈 Return TD
+                  </Button>
+                  <Button 
                     className="bg-slate-600 hover:bg-slate-700"
                     onClick={() => {
                       setGameStatus(null)
@@ -5029,6 +5820,40 @@ export default function LiveGamePage({ standalone = false }) {
                     📍 Out of Bounds
                   </Button>
                   <Button 
+                    className="bg-purple-600 hover:bg-purple-700"
+                    onClick={() => {
+                      // Faked punt - resume play
+                      setGameStatus(null)
+                    }}
+                  >
+                    🎭 Faked
+                  </Button>
+                  <Button 
+                    className="bg-orange-600 hover:bg-orange-700"
+                    onClick={() => {
+                      // Blocked punt - possession stays with punting team's opponent
+                      setGameStatus(null)
+                      stopTimer()
+                      togglePossession()
+                      setDown(1)
+                      setDistance(10)
+                    }}
+                  >
+                    🚫 Blocked
+                  </Button>
+                  <Button 
+                    className="bg-pink-600 hover:bg-pink-700"
+                    onClick={() => {
+                      // Blocked punt returned for TD
+                      const blockingTeam = possession === 'home' ? 'away' : 'home'
+                      setGameStatus(null)
+                      stopTimer()
+                      setShowTDPanel(blockingTeam)
+                    }}
+                  >
+                    🏈 Block TD
+                  </Button>
+                  <Button 
                     className="bg-yellow-500 hover:bg-yellow-600 text-black"
                     onClick={() => {
                       setGameStatus(null)
@@ -5047,6 +5872,19 @@ export default function LiveGamePage({ standalone = false }) {
                     }}
                   >
                     🏈💨 Fumble
+                  </Button>
+                  <Button 
+                    className="bg-rose-500 hover:bg-rose-600"
+                    onClick={() => {
+                      // Muffed punt - punting team recovers
+                      setGameStatus(null)
+                      stopTimer()
+                      // Possession stays with punting team
+                      setDown(1)
+                      setDistance(10)
+                    }}
+                  >
+                    🙈 Muffed
                   </Button>
                   <Button 
                     className="bg-gray-600 hover:bg-gray-700"
@@ -5070,12 +5908,22 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* Quick Special Teams / Go For It - only on 4th down */}
             {!kickoffPending && gameStatus !== 'kickoff' && gameStatus !== 'punt' && game.quarter !== 'Pregame' && gameStatus !== 'halftime-show' && !(game.quarter === 'Q4' && game.home_score === game.away_score && gameStatus === 'end-quarter') && !showFGAttempt && down === 4 && !goingForIt && (
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 <Button 
                   className="bg-amber-500 hover:bg-amber-600"
                   onClick={() => setGameStatus('punt')}
                 >
                   🦶 Punt
+                </Button>
+                <Button 
+                  className="bg-orange-500 hover:bg-orange-600"
+                  onClick={() => {
+                    setShow3AndOut(true)
+                    setTimeout(() => setShow3AndOut(false), 3000)
+                    setGameStatus('punt')
+                  }}
+                >
+                  3 & Out
                 </Button>
                 <Button 
                   className="bg-blue-500 hover:bg-blue-600"
@@ -5523,61 +6371,125 @@ export default function LiveGamePage({ standalone = false }) {
                       <div className="text-center text-sm font-bold text-amber-800 mb-1">
                         {showPATAttempt === 'pat' ? 'PAT' : '2PT'} Try
                       </div>
-                      <Button 
-                        className="w-full bg-green-600 hover:bg-green-700 text-white font-bold text-sm"
-                        onClick={() => {
-                          setPatResult('good')
-                          if (showPATAttempt === 'pat') {
-                            updateScore(possession || 'home', 1)
-                          } else {
-                            score2PT(possession || 'home')
-                          }
-                          setTimeout(() => {
+                      <div className="grid grid-cols-2 gap-1">
+                        <Button 
+                          className="bg-green-600 hover:bg-green-700 text-white font-bold text-xs h-8"
+                          onClick={() => {
+                            setPatResult('good')
+                            if (showPATAttempt === 'pat') {
+                              updateScore(possession || 'home', 1)
+                            } else {
+                              score2PT(possession || 'home')
+                            }
+                            setTimeout(() => {
+                              setShowPATAttempt(null)
+                              setPatResult(null)
+                              if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                                setShowOTEndPrompt(true)
+                              } else {
+                                setKickoffPending(true)
+                                setShowAdBreakPrompt(true)
+                                setPossession(null)
+                                setShowPlayClock(false)
+                              }
+                              setHideDownDistance(true)
+                            }, 2000)
+                          }}
+                        >
+                          ✓ Good
+                        </Button>
+                        <Button 
+                          className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs h-8"
+                          onClick={() => {
+                            setPatResult('no-good')
+                            setTimeout(() => {
+                              setShowPATAttempt(null)
+                              setPatResult(null)
+                              if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                                setShowOTEndPrompt(true)
+                              } else {
+                                setKickoffPending(true)
+                                setShowAdBreakPrompt(true)
+                                setPossession(null)
+                                setShowPlayClock(false)
+                              }
+                              setHideDownDistance(true)
+                            }, 2000)
+                          }}
+                        >
+                          ✗ No Good
+                        </Button>
+                        <Button 
+                          className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs h-8"
+                          onClick={() => {
                             setShowPATAttempt(null)
                             setPatResult(null)
-                            setKickoffPending(true)
-                            setShowAdBreakPrompt(true)
-                            setPossession(null)
-                            setShowPlayClock(false)
-                            setHideDownDistance(true)
-                          }, 2000)
-                        }}
-                      >
-                        ✓ Good
-                      </Button>
-                      <Button 
-                        className="w-full bg-red-600 hover:bg-red-700 text-white font-bold text-sm"
-                        onClick={() => {
-                          setPatResult('no-good')
-                          setTimeout(() => {
+                            setHideDownDistance(false)
+                            setShowPlayClock(true)
+                          }}
+                        >
+                          🎭 Faked
+                        </Button>
+                        <Button 
+                          className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs h-8"
+                          onClick={() => {
+                            setPatResult('blocked')
+                            setTimeout(() => {
+                              setShowPATAttempt(null)
+                              setPatResult(null)
+                              if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                                setShowOTEndPrompt(true)
+                              } else {
+                                setKickoffPending(true)
+                                setShowAdBreakPrompt(true)
+                                setPossession(null)
+                                setShowPlayClock(false)
+                              }
+                              setHideDownDistance(true)
+                            }, 2000)
+                          }}
+                        >
+                          🚫 Blocked
+                        </Button>
+                        <Button 
+                          className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs h-8"
+                          onClick={() => {
+                            const defenseTeam = (possession || 'home') === 'home' ? 'away' : 'home'
+                            const points = showPATAttempt === 'pat' ? 6 : 2
+                            updateScore(defenseTeam, points)
+                            setPatResult('blocked-return')
+                            setTimeout(() => {
+                              setShowPATAttempt(null)
+                              setPatResult(null)
+                              if (game.quarter === 'OT' || game.quarter?.startsWith('OT')) {
+                                setShowOTEndPrompt(true)
+                              } else {
+                                setKickoffPending(true)
+                                setShowAdBreakPrompt(true)
+                                setPossession(null)
+                                setShowPlayClock(false)
+                              }
+                              setHideDownDistance(true)
+                            }, 3000)
+                          }}
+                        >
+                          {showPATAttempt === 'pat' ? '🏈 Pick 6' : '🏈 Pick 2'}
+                        </Button>
+                        <Button 
+                          className="bg-yellow-500 hover:bg-yellow-600 text-black font-bold text-xs h-8"
+                          onClick={() => {
                             setShowPATAttempt(null)
                             setPatResult(null)
-                            setKickoffPending(true)
-                            setShowAdBreakPrompt(true)
-                            setPossession(null)
-                            setShowPlayClock(false)
-                            setHideDownDistance(true)
-                          }, 2000)
-                        }}
-                      >
-                        ✗ No Good
-                      </Button>
-                      <Button 
-                        className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold text-sm"
-                        onClick={() => {
-                          // Faked - close PAT attempt and resume play (TD still counts)
-                          setShowPATAttempt(null)
-                          setPatResult(null)
-                          setHideDownDistance(false)
-                          setShowPlayClock(true)
-                        }}
-                      >
-                        🎭 Faked
-                      </Button>
+                            showFlagStage1()
+                          }}
+                        >
+                          🚩 Penalty
+                        </Button>
+                      </div>
                       <Button 
                         variant="outline"
                         size="sm"
-                        className="w-full border-amber-400 text-amber-800 text-xs"
+                        className="w-full border-amber-400 text-amber-800 text-xs mt-1"
                         onClick={() => {
                           setShowPATAttempt(null)
                           setPatResult(null)
@@ -6299,10 +7211,24 @@ export default function LiveGamePage({ standalone = false }) {
       {game.status === 'scheduled' && (
         <Card className="bg-green-50 border-green-200">
           <CardContent className="py-6 text-center">
-            <Button size="lg" className="gap-2 bg-green-600 hover:bg-green-700" onClick={startGame}>
-              <Play className="h-5 w-5" />
-              Kickoff - Start Game
-            </Button>
+            <div className="flex items-center justify-center gap-3">
+              <Button size="lg" className="gap-2 bg-green-600 hover:bg-green-700" onClick={startGame}>
+                <Play className="h-5 w-5" />
+                Kickoff - Start Game
+              </Button>
+              <Button 
+                size="lg" 
+                variant="outline"
+                className="gap-2 border-purple-300 text-purple-600 hover:bg-purple-50"
+                onClick={() => {
+                  setQuickFinishScores({ home: game.home_score, away: game.away_score })
+                  setShowQuickFinish(true)
+                }}
+              >
+                <Zap className="h-5 w-5" />
+                Quick Finish
+              </Button>
+            </div>
             {countdown && !countdown.passed && (
               <div className="mt-4">
                 <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">Time until scheduled kickoff:</p>
@@ -6695,6 +7621,17 @@ export default function LiveGamePage({ standalone = false }) {
                     <Square className="h-4 w-4" />
                     End Game
                   </Button>
+                  <Button
+                    variant="outline"
+                    className="gap-2 w-full border-purple-300 text-purple-600 hover:bg-purple-50"
+                    onClick={() => {
+                      setQuickFinishScores({ home: game.home_score, away: game.away_score })
+                      setShowQuickFinish(true)
+                    }}
+                  >
+                    <Zap className="h-4 w-4" />
+                    Quick Finish
+                  </Button>
                 </div>
               </div>
             </CardContent>
@@ -6959,6 +7896,243 @@ export default function LiveGamePage({ standalone = false }) {
                 </div>
               </div>
 
+
+              {/* Conversion Rates */}
+              <div className="border-t pt-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase mb-2">Conversion Rates</p>
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Away Team */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      {game.away_team?.logo_url ? (
+                        <img src={game.away_team.logo_url} alt="" className="h-4 w-4 object-contain" />
+                      ) : (
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: game.away_team?.color || '#6b7280' }} />
+                      )}
+                      {game.away_team?.abbreviation || 'Away'}
+                    </p>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-slate-500 w-16">3rd Down:</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, thirdDownConv: Math.max(0, s.away.thirdDownConv - 1)}}))}> -</Button>
+                        <span className="font-bold">{quickStats.away.thirdDownConv}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, thirdDownConv: s.away.thirdDownConv + 1}}))}>+</Button>
+                      </div>
+                      <span>/</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, thirdDownAtt: Math.max(0, s.away.thirdDownAtt - 1)}}))}>-</Button>
+                        <span className="font-bold">{quickStats.away.thirdDownAtt}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, thirdDownAtt: s.away.thirdDownAtt + 1}}))}>+</Button>
+                      </div>
+                      <span className="text-slate-400">({quickStats.away.thirdDownAtt > 0 ? Math.round(quickStats.away.thirdDownConv / quickStats.away.thirdDownAtt * 100) : 0}%)</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-slate-500 w-16">4th Down:</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, fourthDownConv: Math.max(0, s.away.fourthDownConv - 1)}}))}>-</Button>
+                        <span className="font-bold">{quickStats.away.fourthDownConv}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, fourthDownConv: s.away.fourthDownConv + 1}}))}>+</Button>
+                      </div>
+                      <span>/</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, fourthDownAtt: Math.max(0, s.away.fourthDownAtt - 1)}}))}>-</Button>
+                        <span className="font-bold">{quickStats.away.fourthDownAtt}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, away: {...s.away, fourthDownAtt: s.away.fourthDownAtt + 1}}))}>+</Button>
+                      </div>
+                      <span className="text-slate-400">({quickStats.away.fourthDownAtt > 0 ? Math.round(quickStats.away.fourthDownConv / quickStats.away.fourthDownAtt * 100) : 0}%)</span>
+                    </div>
+                  </div>
+                  {/* Home Team */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      {game.home_team?.logo_url ? (
+                        <img src={game.home_team.logo_url} alt="" className="h-4 w-4 object-contain" />
+                      ) : (
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: game.home_team?.color || '#6b7280' }} />
+                      )}
+                      {game.home_team?.abbreviation || 'Home'}
+                    </p>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-slate-500 w-16">3rd Down:</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, thirdDownConv: Math.max(0, s.home.thirdDownConv - 1)}}))}>-</Button>
+                        <span className="font-bold">{quickStats.home.thirdDownConv}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, thirdDownConv: s.home.thirdDownConv + 1}}))}>+</Button>
+                      </div>
+                      <span>/</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, thirdDownAtt: Math.max(0, s.home.thirdDownAtt - 1)}}))}>-</Button>
+                        <span className="font-bold">{quickStats.home.thirdDownAtt}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, thirdDownAtt: s.home.thirdDownAtt + 1}}))}>+</Button>
+                      </div>
+                      <span className="text-slate-400">({quickStats.home.thirdDownAtt > 0 ? Math.round(quickStats.home.thirdDownConv / quickStats.home.thirdDownAtt * 100) : 0}%)</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-slate-500 w-16">4th Down:</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, fourthDownConv: Math.max(0, s.home.fourthDownConv - 1)}}))}>-</Button>
+                        <span className="font-bold">{quickStats.home.fourthDownConv}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, fourthDownConv: s.home.fourthDownConv + 1}}))}>+</Button>
+                      </div>
+                      <span>/</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, fourthDownAtt: Math.max(0, s.home.fourthDownAtt - 1)}}))}>-</Button>
+                        <span className="font-bold">{quickStats.home.fourthDownAtt}</span>
+                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-[10px]" onClick={() => setQuickStats(s => ({...s, home: {...s.home, fourthDownAtt: s.home.fourthDownAtt + 1}}))}>+</Button>
+                      </div>
+                      <span className="text-slate-400">({quickStats.home.fourthDownAtt > 0 ? Math.round(quickStats.home.fourthDownConv / quickStats.home.fourthDownAtt * 100) : 0}%)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Time of Possession */}
+              <div className="border-t pt-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase mb-2">Time of Possession</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="text-center">
+                    <p className="text-sm font-medium mb-1">{game.away_team?.abbreviation || 'Away'}</p>
+                    <p className="text-2xl font-bold" style={{ color: game.away_team?.color }}>{formatTOP(timeOfPossession.away)}</p>
+                    <div className="flex justify-center gap-1 mt-1">
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, away: Math.max(0, prev.away - 60)}))}>-1m</Button>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, away: Math.max(0, prev.away - 10)}))}>-10s</Button>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, away: prev.away + 10}))}>+10s</Button>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, away: prev.away + 60}))}>+1m</Button>
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-medium mb-1">{game.home_team?.abbreviation || 'Home'}</p>
+                    <p className="text-2xl font-bold" style={{ color: game.home_team?.color }}>{formatTOP(timeOfPossession.home)}</p>
+                    <div className="flex justify-center gap-1 mt-1">
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, home: Math.max(0, prev.home - 60)}))}>-1m</Button>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, home: Math.max(0, prev.home - 10)}))}>-10s</Button>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, home: prev.home + 10}))}>+10s</Button>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTimeOfPossession(prev => ({...prev, home: prev.home + 60}))}>+1m</Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Game Log */}
+              <div className="border-t pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-slate-500 uppercase">Game Log ({gameLog.length} entries)</p>
+                  <div className="flex gap-1">
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      className="h-6 text-xs"
+                      onClick={() => {
+                        const desc = prompt('Enter log entry description:')
+                        if (desc) addGameLogEntry('manual', desc, possession)
+                      }}
+                    >
+                      + Add Entry
+                    </Button>
+                    {gameLog.length > 0 && (
+                      <Button 
+                        size="sm" 
+                        variant="ghost"
+                        className="h-6 text-xs text-red-500 hover:text-red-700"
+                        onClick={() => {
+                          if (confirm('Clear all game log entries?')) setGameLog([])
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Export Buttons */}
+                <div className="flex gap-2 mb-2">
+                  <Button 
+                    size="sm" 
+                    variant="outline"
+                    className="h-7 text-xs flex-1"
+                    onClick={copyGameSummary}
+                  >
+                    📋 Copy Summary
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant="outline"
+                    className="h-7 text-xs flex-1"
+                    onClick={downloadGameSummary}
+                  >
+                    💾 Download
+                  </Button>
+                  {game.quarter === 'Halftime' && (
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      className="h-7 text-xs flex-1 border-purple-400 text-purple-600"
+                      onClick={() => {
+                        const summary = generateHalftimeSummary()
+                        navigator.clipboard.writeText(summary).then(() => {
+                          alert('Halftime stats copied!')
+                        }).catch(() => alert(summary))
+                      }}
+                    >
+                      📊 HT Stats
+                    </Button>
+                  )}
+                </div>
+                {gameLog.length > 0 ? (
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {[...gameLog].reverse().slice(0, 20).map(entry => (
+                      <div key={entry.id} className="text-xs flex items-start gap-2 py-1 border-b border-slate-100 dark:border-slate-800">
+                        <span className="text-slate-400 w-8">{entry.quarter}</span>
+                        <span className="text-slate-400 w-10">{entry.time}</span>
+                        <span className={`px-1 rounded text-[10px] uppercase ${
+                          entry.type === 'score' ? 'bg-green-100 text-green-700' :
+                          entry.type === 'turnover' ? 'bg-red-100 text-red-700' :
+                          entry.type === 'penalty' ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-slate-100 text-slate-600'
+                        }`}>{entry.type}</span>
+                        <span className="flex-1">{entry.description}</span>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-4 w-4 p-0 text-slate-300 hover:text-red-500"
+                          onClick={() => setGameLog(prev => prev.filter(e => e.id !== entry.id))}
+                        >
+                          ✕
+                        </Button>
+                      </div>
+                    ))}
+                    {gameLog.length > 20 && (
+                      <p className="text-xs text-slate-400 text-center py-1">...and {gameLog.length - 20} more entries</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 text-center py-2">No log entries yet</p>
+                )}
+              </div>
+
+              {/* Reset Stats */}
+              <div className="border-t pt-3">
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  className="w-full text-orange-600 border-orange-300 hover:bg-orange-50"
+                  onClick={() => {
+                    if (confirm('Reset all quick stats to zero? This cannot be undone.')) {
+                      setQuickStats({
+                        home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0, thirdDownAtt: 0, thirdDownConv: 0, fourthDownAtt: 0, fourthDownConv: 0 },
+                        away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0, thirdDownAtt: 0, thirdDownConv: 0, fourthDownAtt: 0, fourthDownConv: 0 },
+                        custom: quickStats.custom?.map(c => ({ ...c, home: 0, away: 0 })) || [],
+                        awards: quickStats.awards?.map(a => ({ ...a, home: 0, away: 0 })) || []
+                      })
+                      setTimeOfPossession({ home: 0, away: 0 })
+                      setCoinToss({ winner: null, choice: null })
+                    }
+                  }}
+                >
+                  🔄 Reset All Stats
+                </Button>
+              </div>
+
               {/* Custom Stats Section */}
               <div className="border-t pt-3">
                 <div className="flex items-center justify-between mb-2">
@@ -7042,9 +8216,346 @@ export default function LiveGamePage({ standalone = false }) {
                   <p className="text-xs text-slate-400 text-center py-2">No custom stats yet. Add one to track anything!</p>
                 )}
               </div>
+
+              {/* Awards/Trophies Section */}
+              <div className="border-t pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-slate-500 uppercase">🏆 Awards & Trophies</p>
+                  <Button 
+                    size="sm" 
+                    variant="outline"
+                    className="h-6 text-xs"
+                    onClick={() => {
+                      setEditingAward(null)
+                      setAwardForm({ label: '', emoji: '🏆' })
+                      setShowAwardDialog(true)
+                    }}
+                  >
+                    + Add Award
+                  </Button>
+                </div>
+                
+                {quickStats.awards?.length > 0 ? (
+                  <div className="space-y-2">
+                    {quickStats.awards.map(award => (
+                      <div key={award.id} className="flex items-center gap-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700">
+                        <span className="text-lg">{award.emoji}</span>
+                        <span className="text-sm font-medium flex-1">{award.label}</span>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            awards: s.awards.map(a => a.id === award.id ? { ...a, away: Math.max(0, a.away - 1) } : a)
+                          }))}>-</Button>
+                          <span className="text-sm font-bold w-6 text-center">{award.away}</span>
+                          <span className="text-xs text-slate-400">A</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            awards: s.awards.map(a => a.id === award.id ? { ...a, away: a.away + 1 } : a)
+                          }))}>+</Button>
+                        </div>
+                        <span className="text-slate-300">|</span>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            awards: s.awards.map(a => a.id === award.id ? { ...a, home: Math.max(0, a.home - 1) } : a)
+                          }))}>-</Button>
+                          <span className="text-sm font-bold w-6 text-center">{award.home}</span>
+                          <span className="text-xs text-slate-400">H</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" variant="outline" className="h-6 w-6 p-0" onClick={() => setQuickStats(s => ({
+                            ...s,
+                            awards: s.awards.map(a => a.id === award.id ? { ...a, home: a.home + 1 } : a)
+                          }))}>+</Button>
+                        </div>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-6 w-6 p-0 text-slate-400 hover:text-blue-600"
+                          onClick={() => {
+                            setEditingAward(award)
+                            setAwardForm({ label: award.label, emoji: award.emoji })
+                            setShowAwardDialog(true)
+                          }}
+                        >
+                          ✏️
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-6 w-6 p-0 text-slate-400 hover:text-red-600"
+                          onClick={() => setQuickStats(s => ({
+                            ...s,
+                            awards: s.awards.filter(a => a.id !== award.id)
+                          }))}
+                        >
+                          ✕
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 text-center py-2">No awards yet. Add trophies, MVPs, or any achievements!</p>
+                )}
+              </div>
+              
               </CardContent>
             )}
           </Card>
+      )}
+
+      {/* Coin Toss - Compact Section */}
+      {game && (
+        <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-slate-600 dark:text-slate-400">🪙 Coin Toss:</span>
+            <Button 
+              size="sm" 
+              variant={coinToss.winner === 'away' ? "default" : "outline"}
+              style={coinToss.winner === 'away' ? { backgroundColor: game.away_team?.color } : {}}
+              onClick={() => setCoinToss(prev => ({ ...prev, winner: 'away' }))}
+              className="h-7 text-xs"
+            >
+              {game.away_team?.abbreviation || 'Away'}
+            </Button>
+            <Button 
+              size="sm" 
+              variant={coinToss.winner === 'home' ? "default" : "outline"}
+              style={coinToss.winner === 'home' ? { backgroundColor: game.home_team?.color } : {}}
+              onClick={() => setCoinToss(prev => ({ ...prev, winner: 'home' }))}
+              className="h-7 text-xs"
+            >
+              {game.home_team?.abbreviation || 'Home'}
+            </Button>
+            <span className="text-slate-300 dark:text-slate-600">|</span>
+            <Button 
+              size="sm" 
+              variant={coinToss.choice === 'receive' ? "default" : "outline"}
+              className={`h-7 text-xs ${coinToss.choice === 'receive' ? "bg-green-600" : ""}`}
+              onClick={() => setCoinToss(prev => ({ ...prev, choice: 'receive' }))}
+            >
+              Receive
+            </Button>
+            <Button 
+              size="sm" 
+              variant={coinToss.choice === 'kick' ? "default" : "outline"}
+              className={`h-7 text-xs ${coinToss.choice === 'kick' ? "bg-blue-600" : ""}`}
+              onClick={() => setCoinToss(prev => ({ ...prev, choice: 'kick' }))}
+            >
+              Kick
+            </Button>
+            <Button 
+              size="sm" 
+              variant={coinToss.choice === 'defer' ? "default" : "outline"}
+              className={`h-7 text-xs ${coinToss.choice === 'defer' ? "bg-purple-600" : ""}`}
+              onClick={() => setCoinToss(prev => ({ ...prev, choice: 'defer' }))}
+            >
+              Defer
+            </Button>
+            {coinToss.winner && (
+              <>
+                <span className="text-slate-300 dark:text-slate-600">|</span>
+                <Button 
+                  size="sm" 
+                  variant={showCoinToss ? "default" : "outline"}
+                  className={`h-7 text-xs ${showCoinToss ? "bg-amber-500 hover:bg-amber-600" : ""}`}
+                  onClick={() => setShowCoinToss(!showCoinToss)}
+                >
+                  {showCoinToss ? '📺 Hide' : '📺 Show'}
+                </Button>
+              </>
+            )}
+            {(coinToss.winner || coinToss.choice) && (
+              <Button 
+                size="sm" 
+                variant="ghost"
+                className="h-7 text-xs text-slate-400 hover:text-red-500"
+                onClick={() => {
+                  setCoinToss({ winner: null, choice: null })
+                  setShowCoinToss(false)
+                }}
+              >
+                ✕
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Viewer Notifications Card */}
+      {game && (
+        <Card>
+          <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowNotificationPanel(!showNotificationPanel)}>
+            <CardTitle className="text-lg flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                🔔 Viewer Notifications
+              </span>
+              <Button variant="ghost" size="sm">
+                {showNotificationPanel ? '▲ Hide' : '▼ Show'}
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          {showNotificationPanel && (
+            <CardContent className="space-y-4">
+              {/* Auto-notification toggles */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Auto-send notifications:</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input 
+                      type="checkbox" 
+                      checked={notificationSettings.autoScores}
+                      onChange={e => setNotificationSettings(s => ({ ...s, autoScores: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Scores
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input 
+                      type="checkbox" 
+                      checked={notificationSettings.autoTouchdowns}
+                      onChange={e => setNotificationSettings(s => ({ ...s, autoTouchdowns: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Touchdowns
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input 
+                      type="checkbox" 
+                      checked={notificationSettings.autoTurnovers}
+                      onChange={e => setNotificationSettings(s => ({ ...s, autoTurnovers: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Turnovers
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input 
+                      type="checkbox" 
+                      checked={notificationSettings.autoQuarterEnd}
+                      onChange={e => setNotificationSettings(s => ({ ...s, autoQuarterEnd: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Quarter End
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input 
+                      type="checkbox" 
+                      checked={notificationSettings.autoHalftime}
+                      onChange={e => setNotificationSettings(s => ({ ...s, autoHalftime: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Halftime
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input 
+                      type="checkbox" 
+                      checked={notificationSettings.autoGameEnd}
+                      onChange={e => setNotificationSettings(s => ({ ...s, autoGameEnd: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Game End
+                  </label>
+                </div>
+              </div>
+              
+              {/* Preset notification buttons */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Quick notifications:</p>
+                <div className="flex flex-wrap gap-2">
+                  {(game.league?.game_defaults?.presetNotifications || defaultPresetNotifications).map(preset => (
+                    <Button 
+                      key={preset.id}
+                      size="sm" 
+                      variant="outline" 
+                      className="h-8"
+                      onClick={() => sendNotification(preset.title, preset.message, 'info')}
+                    >
+                      {preset.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Custom notification with title and message */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Custom notification:</p>
+                <div className="space-y-2">
+                  <Input 
+                    placeholder="Title (e.g., 'Breaking News')"
+                    value={customNotificationTitle}
+                    onChange={e => setCustomNotificationTitle(e.target.value)}
+                    className="h-9"
+                  />
+                  <div className="flex gap-2">
+                    <Input 
+                      placeholder="Message..."
+                      value={customNotificationMessage}
+                      onChange={e => setCustomNotificationMessage(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && customNotificationMessage.trim()) {
+                          sendNotification(
+                            customNotificationTitle.trim() || 'Notification',
+                            customNotificationMessage.trim(),
+                            'custom'
+                          )
+                          setCustomNotificationTitle('')
+                          setCustomNotificationMessage('')
+                        }
+                      }}
+                      className="h-9"
+                    />
+                    <Button 
+                      className="h-9"
+                      onClick={() => {
+                        if (customNotificationMessage.trim()) {
+                          sendNotification(
+                            customNotificationTitle.trim() || 'Notification',
+                            customNotificationMessage.trim(),
+                            'custom'
+                          )
+                          setCustomNotificationTitle('')
+                          setCustomNotificationMessage('')
+                        }
+                      }}
+                    >
+                      Send
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Notification history */}
+              {notificationHistory.length > 0 && (
+                <div className="space-y-2 border-t pt-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Recent ({notificationHistory.length})</p>
+                    <Button 
+                      size="sm" 
+                      variant="ghost" 
+                      className="h-6 text-xs text-slate-400"
+                      onClick={() => setNotificationHistory([])}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {[...notificationHistory].reverse().slice(0, 10).map(n => (
+                      <div key={n.id} className="text-sm text-slate-600 dark:text-slate-400 flex items-start gap-2 py-1 border-b border-slate-100 dark:border-slate-800 last:border-0">
+                        <span className="text-slate-400 text-xs w-8">{n.quarter}</span>
+                        <div className="flex-1">
+                          <span className="font-medium">{n.title}</span>
+                          {n.message && <span className="text-slate-500"> - {n.message}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          )}
+        </Card>
       )}
 
       {/* Custom Stat Dialog */}
@@ -7135,6 +8646,153 @@ export default function LiveGamePage({ standalone = false }) {
               }}
             >
               {editingCustomStat ? 'Save Changes' : 'Add Stat'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Award Dialog */}
+      <Dialog open={showAwardDialog} onOpenChange={setShowAwardDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{editingAward ? 'Edit Award' : 'Add Award'}</DialogTitle>
+            <DialogDescription>
+              Create an award or trophy to track achievements
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Award Name</Label>
+              <Input 
+                placeholder="e.g., MVP, Best Play, Sportsmanship"
+                value={awardForm.label}
+                onChange={e => setAwardForm(f => ({ ...f, label: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Emoji</Label>
+              <div className="flex flex-wrap gap-2">
+                {['🏆', '🥇', '🥈', '🥉', '⭐', '🌟', '💪', '🎯', '🔥', '👑', '🎖️', '🏅', '💎', '⚡', '🦅', '🏈'].map(e => (
+                  <button
+                    key={e}
+                    className={`w-10 h-10 rounded text-xl flex items-center justify-center ${awardForm.emoji === e ? 'ring-2 ring-amber-500 bg-amber-100' : 'bg-slate-100 hover:bg-slate-200'}`}
+                    onClick={() => setAwardForm(f => ({ ...f, emoji: e }))}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              className="flex-1"
+              onClick={() => setShowAwardDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button 
+              className="flex-1 bg-amber-600 hover:bg-amber-700"
+              disabled={!awardForm.label.trim()}
+              onClick={() => {
+                if (editingAward) {
+                  // Update existing
+                  setQuickStats(s => ({
+                    ...s,
+                    awards: s.awards.map(a => a.id === editingAward.id 
+                      ? { ...a, label: awardForm.label, emoji: awardForm.emoji }
+                      : a
+                    )
+                  }))
+                } else {
+                  // Add new
+                  const newAward = {
+                    id: `award_${Date.now()}`,
+                    label: awardForm.label,
+                    emoji: awardForm.emoji,
+                    home: 0,
+                    away: 0
+                  }
+                  setQuickStats(s => ({
+                    ...s,
+                    awards: [...(s.awards || []), newAward]
+                  }))
+                }
+                setShowAwardDialog(false)
+              }}
+            >
+              {editingAward ? 'Save Changes' : 'Add Award'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Finish Dialog */}
+      <Dialog open={showQuickFinish} onOpenChange={setShowQuickFinish}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>⚡ Quick Finish</DialogTitle>
+            <DialogDescription>
+              Enter the final scores and end the game immediately
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-center block">{game?.away_team?.name || 'Away'}</Label>
+                <Input 
+                  type="number"
+                  min="0"
+                  className="text-center text-2xl font-bold h-14"
+                  value={quickFinishScores.away}
+                  onChange={e => setQuickFinishScores(s => ({ ...s, away: parseInt(e.target.value) || 0 }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-center block">{game?.home_team?.name || 'Home'}</Label>
+                <Input 
+                  type="number"
+                  min="0"
+                  className="text-center text-2xl font-bold h-14"
+                  value={quickFinishScores.home}
+                  onChange={e => setQuickFinishScores(s => ({ ...s, home: parseInt(e.target.value) || 0 }))}
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              className="flex-1"
+              onClick={() => setShowQuickFinish(false)}
+            >
+              Cancel
+            </Button>
+            <Button 
+              className="flex-1 bg-purple-600 hover:bg-purple-700"
+              onClick={async () => {
+                // Set the scores
+                await api.update(gameId, { 
+                  home_score: quickFinishScores.home, 
+                  away_score: quickFinishScores.away,
+                  quarter: 'Final',
+                  status: 'completed'
+                })
+                // Update local state
+                setGame(g => ({ 
+                  ...g, 
+                  home_score: quickFinishScores.home, 
+                  away_score: quickFinishScores.away,
+                  quarter: 'Final',
+                  status: 'completed'
+                }))
+                stopTimer()
+                stopPlayClock()
+                setShowQuickFinish(false)
+              }}
+            >
+              🏁 Finish Game
             </Button>
           </div>
         </DialogContent>

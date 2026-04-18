@@ -45,6 +45,10 @@ class League(Base):
     game_unit_label_3 = Column(String(50))  # Extra unit, e.g., "Preseason Week"
     penalties = Column(Text)  # JSON array of penalty names, e.g., ["Holding", "False Start", "Offsides"]
     mechanics = Column(Text)  # JSON object of enabled mechanics, e.g., {"downs": true, "play_clock": true}
+    game_defaults = Column(Text)  # JSON object of game defaults, e.g., {"quarter_length": 15, "timeouts_per_half": 3}
+    onside_alt_distance = Column(Integer, default=15)  # Distance for 4th & X onside kick alternative
+    four_point_fg_enabled = Column(Boolean, default=False)  # Whether 4-point field goals are enabled
+    four_point_fg_distance = Column(Integer, default=50)  # Minimum distance for 4-point field goal
     is_finished = Column(Boolean, default=False)  # Whether league is finished (locks editing)
     share_code = Column(String(8), unique=True, default=generate_share_code, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -64,6 +68,7 @@ class Season(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)  # e.g., "2025-26", "Spring 2025"
+    phase = Column(String(20), default="regular")  # preseason, regular, playoffs, offseason
     is_current = Column(Boolean, default=True)  # Only one season per league should be current
     is_finished = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -119,6 +124,16 @@ class TeamSeasonStats(Base):
     ties = Column(Integer, default=0)
     points_for = Column(Integer, default=0)
     points_against = Column(Integer, default=0)
+    # Phase-specific records
+    preseason_wins = Column(Integer, default=0)
+    preseason_losses = Column(Integer, default=0)
+    preseason_ties = Column(Integer, default=0)
+    regular_wins = Column(Integer, default=0)
+    regular_losses = Column(Integer, default=0)
+    regular_ties = Column(Integer, default=0)
+    playoff_wins = Column(Integer, default=0)
+    playoff_losses = Column(Integer, default=0)
+    playoff_ties = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     team = relationship("Team", back_populates="season_stats")
@@ -145,6 +160,28 @@ class Team(Base):
     ties = Column(Integer, default=0)
     points_for = Column(Integer, default=0)
     points_against = Column(Integer, default=0)
+    # Home record
+    home_wins = Column(Integer, default=0)
+    home_losses = Column(Integer, default=0)
+    home_ties = Column(Integer, default=0)
+    # Away record
+    away_wins = Column(Integer, default=0)
+    away_losses = Column(Integer, default=0)
+    away_ties = Column(Integer, default=0)
+    # Preseason record
+    preseason_wins = Column(Integer, default=0)
+    preseason_losses = Column(Integer, default=0)
+    preseason_ties = Column(Integer, default=0)
+    # Regular season record
+    regular_wins = Column(Integer, default=0)
+    regular_losses = Column(Integer, default=0)
+    regular_ties = Column(Integer, default=0)
+    # Playoff record
+    playoff_wins = Column(Integer, default=0)
+    playoff_losses = Column(Integer, default=0)
+    playoff_ties = Column(Integer, default=0)
+    # Trophies/Awards - JSON object storing counts, e.g., {"championships": 2, "division_titles": 3}
+    trophies = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     league = relationship("League", back_populates="teams")
@@ -158,8 +195,8 @@ class Game(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False)
     season_id = Column(String, ForeignKey("seasons.id", ondelete="CASCADE"), nullable=True)  # Link to season
-    home_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
-    away_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    home_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=True)  # Null = TBD
+    away_team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=True)  # Null = TBD
     home_score = Column(Integer, default=0)
     away_score = Column(Integer, default=0)
     status = Column(String(20), default="scheduled")  # scheduled, live, final
@@ -298,6 +335,16 @@ class StandaloneGame(Base):
     timer_enabled = Column(Boolean, default=True)  # Whether to show timer in simple mode
     timer_seconds = Column(Integer, default=0)  # Timer value in seconds
     timer_running = Column(Boolean, default=False)  # Whether timer is currently running
+    timer_started_at = Column(DateTime)  # When timer was started (for calculating elapsed time)
+    timer_started_seconds = Column(Integer)  # Game time in seconds when timer was started
+    
+    # Game settings
+    quarter_length = Column(String(10), default="15:00")  # Quarter length (e.g., "15:00", "12:00")
+    halftime_length = Column(String(10), default="20:00")  # Halftime length
+    overtime_length = Column(String(10), default="10:00")  # Overtime period length
+    play_clock_duration = Column(Integer, default=40)  # Play clock duration in seconds
+    timeouts_per_half = Column(Integer, default=3)  # Timeouts per half per team
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -348,3 +395,41 @@ class Invite(Base):
 
     from_user = relationship("User", foreign_keys=[from_user_id])
     to_user = relationship("User", foreign_keys=[to_user_id])
+
+
+class UserFollow(Base):
+    """Track which leagues/games a user follows for notifications"""
+    __tablename__ = "user_follows"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=True)
+    game_id = Column(String, ForeignKey("games.id", ondelete="CASCADE"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PushSubscription(Base):
+    """Store push notification subscriptions for web push"""
+    __tablename__ = "push_subscriptions"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    endpoint = Column(Text, nullable=False, unique=True)
+    p256dh = Column(String(255), nullable=False)
+    auth = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class NotificationPreferences(Base):
+    """User notification preferences"""
+    __tablename__ = "notification_preferences"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    notifications_enabled = Column(Boolean, default=True)
+    game_start = Column(Boolean, default=True)
+    game_end = Column(Boolean, default=True)
+    score_updates = Column(Boolean, default=False)
+    quarter_end = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

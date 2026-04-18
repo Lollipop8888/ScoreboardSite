@@ -9,11 +9,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 
 import models
 import schemas
 import auth
+import notifications
 from database import engine, get_db, Base
 
 
@@ -52,6 +54,7 @@ class ConnectionManager:
         if room not in self.active_connections:
             self.active_connections[room] = set()
         self.active_connections[room].add(websocket)
+        print(f"[WS] Client connected to room '{room}' - now {len(self.active_connections[room])} clients")
         # Broadcast updated viewer count
         await self.broadcast_viewer_count(room)
 
@@ -71,15 +74,20 @@ class ConnectionManager:
         await self.broadcast(room, {"type": "viewer_count", "count": count})
 
     async def broadcast(self, room: str, message: dict):
+        print(f"[WS] Broadcasting to room '{room}': {message.get('type', 'unknown')} - {len(self.active_connections.get(room, []))} clients")
         if room in self.active_connections:
             dead_connections = set()
             for connection in self.active_connections[room]:
                 try:
                     await connection.send_json(message)
-                except:
+                    print(f"[WS] Sent to client in room '{room}'")
+                except Exception as e:
+                    print(f"[WS] Failed to send to client: {e}")
                     dead_connections.add(connection)
             for conn in dead_connections:
                 self.active_connections[room].discard(conn)
+        else:
+            print(f"[WS] No clients in room '{room}'")
 
 
 manager = ConnectionManager()
@@ -306,6 +314,8 @@ async def update_league(
         elif key == 'penalties' and value is not None:
             value = json.dumps(value)
         elif key == 'mechanics' and value is not None:
+            value = json.dumps(value)
+        elif key == 'game_defaults' and value is not None:
             value = json.dumps(value)
         setattr(db_league, key, value)
     db.commit()
@@ -659,6 +669,9 @@ async def update_team(
     # Check user owns the league this team belongs to
     check_league_ownership(db, db_team.league_id, current_user)
     for key, value in team.model_dump(exclude_unset=True).items():
+        # Convert trophies dict to JSON string
+        if key == 'trophies' and value is not None:
+            value = json.dumps(value)
         setattr(db_team, key, value)
     db.commit()
     db.refresh(db_team)
@@ -825,12 +838,22 @@ def calculate_live_game_time(game):
 def get_game(game_id: str, db: Session = Depends(get_db)):
     game = db.query(models.Game).options(
         joinedload(models.Game.home_team),
-        joinedload(models.Game.away_team)
+        joinedload(models.Game.away_team),
+        joinedload(models.Game.league)
     ).filter(models.Game.id == game_id).first()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     # Calculate live game time if timer is running
     calculate_live_game_time(game)
+    # Add league settings to game response
+    if game.league:
+        game.onside_alt_distance = game.league.onside_alt_distance
+        game.four_point_fg_enabled = game.league.four_point_fg_enabled
+        game.four_point_fg_distance = game.league.four_point_fg_distance
+    else:
+        game.onside_alt_distance = 15
+        game.four_point_fg_enabled = False
+        game.four_point_fg_distance = 50
     return game
 
 
@@ -838,12 +861,22 @@ def get_game(game_id: str, db: Session = Depends(get_db)):
 def get_game_by_share_code(share_code: str, db: Session = Depends(get_db)):
     game = db.query(models.Game).options(
         joinedload(models.Game.home_team),
-        joinedload(models.Game.away_team)
+        joinedload(models.Game.away_team),
+        joinedload(models.Game.league)
     ).filter(models.Game.share_code == share_code.upper()).first()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     # Calculate live game time if timer is running
     calculate_live_game_time(game)
+    # Add league settings to game response
+    if game.league:
+        game.onside_alt_distance = game.league.onside_alt_distance
+        game.four_point_fg_enabled = game.league.four_point_fg_enabled
+        game.four_point_fg_distance = game.league.four_point_fg_distance
+    else:
+        game.onside_alt_distance = 15
+        game.four_point_fg_enabled = False
+        game.four_point_fg_distance = 50
     return game
 
 
@@ -854,9 +887,11 @@ async def update_game(
     db: Session = Depends(get_db),
     current_user: Optional[models.User] = Depends(auth.get_current_user)
 ):
+    print(f"[API] update_game called for game_id={game_id}")
     db_game = db.query(models.Game).filter(models.Game.id == game_id).first()
     if not db_game:
         raise HTTPException(status_code=404, detail="Game not found")
+    print(f"[API] Found game with share_code={db_game.share_code}")
     # Check user owns the league this game belongs to
     check_league_ownership(db, db_game.league_id, current_user)
     
@@ -865,16 +900,43 @@ async def update_game(
     old_away_score = db_game.away_score
     
     for key, value in game_update.model_dump(exclude_unset=True).items():
-        setattr(db_game, key, value)
+        if key != 'notification':  # Skip notification, it's transient (not stored in DB)
+            setattr(db_game, key, value)
     
     # Handle status changes
     if game_update.status == "live" and old_status != "live":
         db_game.started_at = datetime.utcnow()
+        # Send game start notification
+        home_team = db.query(models.Team).filter(models.Team.id == db_game.home_team_id).first()
+        away_team = db.query(models.Team).filter(models.Team.id == db_game.away_team_id).first()
+        if home_team and away_team:
+            notifications.notify_league_followers(
+                db, db_game.league_id,
+                "Game Started!",
+                f"{away_team.name} vs {home_team.name} is now live",
+                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                notification_type="game_start"
+            )
+            notifications.notify_game_followers(
+                db, game_id,
+                "Game Started!",
+                f"{away_team.name} vs {home_team.name} is now live",
+                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                notification_type="game_start"
+            )
     elif game_update.status == "final" and old_status != "final":
         db_game.ended_at = datetime.utcnow()
         # Update team records
         home_team = db.query(models.Team).filter(models.Team.id == db_game.home_team_id).first()
         away_team = db.query(models.Team).filter(models.Team.id == db_game.away_team_id).first()
+        
+        # Get season phase for phase-specific records
+        season_phase = None
+        if db_game.season_id:
+            season = db.query(models.Season).filter(models.Season.id == db_game.season_id).first()
+            if season:
+                season_phase = season.phase  # 'preseason', 'regular', 'playoffs'
+        
         if home_team and away_team:
             home_team.points_for += db_game.home_score
             home_team.points_against += db_game.away_score
@@ -882,13 +944,73 @@ async def update_game(
             away_team.points_against += db_game.home_score
             if db_game.home_score > db_game.away_score:
                 home_team.wins += 1
+                home_team.home_wins += 1  # Home record
                 away_team.losses += 1
+                away_team.away_losses += 1  # Away record
+                # Phase-specific records
+                if season_phase == 'preseason':
+                    home_team.preseason_wins += 1
+                    away_team.preseason_losses += 1
+                elif season_phase == 'playoffs':
+                    home_team.playoff_wins += 1
+                    away_team.playoff_losses += 1
+                else:  # regular or default
+                    home_team.regular_wins += 1
+                    away_team.regular_losses += 1
+                winner = home_team.name
             elif db_game.away_score > db_game.home_score:
                 away_team.wins += 1
+                away_team.away_wins += 1  # Away record
                 home_team.losses += 1
+                home_team.home_losses += 1  # Home record
+                # Phase-specific records
+                if season_phase == 'preseason':
+                    away_team.preseason_wins += 1
+                    home_team.preseason_losses += 1
+                elif season_phase == 'playoffs':
+                    away_team.playoff_wins += 1
+                    home_team.playoff_losses += 1
+                else:  # regular or default
+                    away_team.regular_wins += 1
+                    home_team.regular_losses += 1
+                winner = away_team.name
             else:
                 home_team.ties += 1
+                home_team.home_ties += 1  # Home record
                 away_team.ties += 1
+                away_team.away_ties += 1  # Away record
+                # Phase-specific records
+                if season_phase == 'preseason':
+                    home_team.preseason_ties += 1
+                    away_team.preseason_ties += 1
+                elif season_phase == 'playoffs':
+                    home_team.playoff_ties += 1
+                    away_team.playoff_ties += 1
+                else:  # regular or default
+                    home_team.regular_ties += 1
+                    away_team.regular_ties += 1
+                winner = None
+            
+            # Send game end notification
+            if winner:
+                body = f"{winner} wins! Final: {away_team.name} {db_game.away_score} - {home_team.name} {db_game.home_score}"
+            else:
+                body = f"It's a tie! Final: {away_team.name} {db_game.away_score} - {home_team.name} {db_game.home_score}"
+            
+            notifications.notify_league_followers(
+                db, db_game.league_id,
+                "Game Ended",
+                body,
+                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                notification_type="game_end"
+            )
+            notifications.notify_game_followers(
+                db, game_id,
+                "Game Ended",
+                body,
+                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                notification_type="game_end"
+            )
     
     db.commit()
     
@@ -901,30 +1023,55 @@ async def update_game(
     # Calculate live game time if timer is running before broadcasting
     calculate_live_game_time(game)
     
-    await manager.broadcast(f"game:{db_game.share_code}", {
+    # Build broadcast data
+    broadcast_data = {
+        "id": game.id,
+        "home_score": game.home_score,
+        "away_score": game.away_score,
+        "status": game.status,
+        "quarter": game.quarter,
+        "game_time": game.game_time,
+        "down": game.down,
+        "distance": game.distance,
+        "ball_on": game.ball_on,
+        "possession": game.possession,
+        "home_timeouts": game.home_timeouts,
+        "away_timeouts": game.away_timeouts,
+        "play_clock": game.play_clock,
+        "display_state": game.display_state,
+        "timer_running": game.timer_running,
+        "timer_started_at": game.timer_started_at.isoformat() if game.timer_started_at else None,
+        "timer_started_seconds": game.timer_started_seconds,
+        "home_team": {"id": game.home_team.id, "name": game.home_team.name, "abbreviation": game.home_team.abbreviation, "color": game.home_team.color, "color2": game.home_team.color2, "logo_url": game.home_team.logo_url},
+        "away_team": {"id": game.away_team.id, "name": game.away_team.name, "abbreviation": game.away_team.abbreviation, "color": game.away_team.color, "color2": game.away_team.color2, "logo_url": game.away_team.logo_url}
+    }
+    
+    # Include notification if present (transient, not stored in DB)
+    if game_update.notification:
+        print(f"[API] League game update received notification: {game_update.notification}")
+        broadcast_data["notification"] = game_update.notification
+    
+    await manager.broadcast(f"game:{db_game.share_code.upper()}", {
         "type": "game_update",
-        "data": {
-            "id": game.id,
-            "home_score": game.home_score,
-            "away_score": game.away_score,
-            "status": game.status,
-            "quarter": game.quarter,
-            "game_time": game.game_time,
-            "down": game.down,
-            "distance": game.distance,
-            "ball_on": game.ball_on,
-            "possession": game.possession,
-            "home_timeouts": game.home_timeouts,
-            "away_timeouts": game.away_timeouts,
-            "play_clock": game.play_clock,
-            "display_state": game.display_state,
-            "timer_running": game.timer_running,
-            "timer_started_at": game.timer_started_at.isoformat() if game.timer_started_at else None,
-            "timer_started_seconds": game.timer_started_seconds,
-            "home_team": {"id": game.home_team.id, "name": game.home_team.name, "abbreviation": game.home_team.abbreviation, "color": game.home_team.color, "color2": game.home_team.color2, "logo_url": game.home_team.logo_url},
-            "away_team": {"id": game.away_team.id, "name": game.away_team.name, "abbreviation": game.away_team.abbreviation, "color": game.away_team.color, "color2": game.away_team.color2, "logo_url": game.away_team.logo_url}
-        }
+        "data": broadcast_data
     })
+    
+    # Also broadcast to league room for league-wide updates
+    league = db.query(models.League).filter(models.League.id == db_game.league_id).first()
+    if league:
+        await manager.broadcast(f"league:{league.share_code.upper()}", {
+            "type": "game_update",
+            "data": {
+                "id": game.id,
+                "home_score": game.home_score,
+                "away_score": game.away_score,
+                "status": game.status,
+                "quarter": game.quarter,
+                "game_time": game.game_time,
+                "home_team": {"id": game.home_team.id, "name": game.home_team.name, "abbreviation": game.home_team.abbreviation},
+                "away_team": {"id": game.away_team.id, "name": game.away_team.name, "abbreviation": game.away_team.abbreviation}
+            }
+        })
     
     return game
 
@@ -988,7 +1135,7 @@ async def check_heartbeat(game_id: str, db: Session = Depends(get_db)):
         db.commit()
         
         # Broadcast the tech difficulties status
-        await manager.broadcast(f"game:{db_game.share_code}", {
+        await manager.broadcast(f"game:{db_game.share_code.upper()}", {
             "type": "game_update",
             "data": {
                 "id": db_game.id,
@@ -1235,7 +1382,7 @@ async def update_bracket_match(
     ).filter(models.BracketMatch.id == match_id).first()
     
     # Broadcast update
-    await manager.broadcast(f"bracket:{bracket.share_code}", {
+    await manager.broadcast(f"bracket:{bracket.share_code.upper()}", {
         "type": "bracket_update",
         "data": {"match_id": match_id, "bracket_id": bracket.id}
     })
@@ -1471,7 +1618,7 @@ async def add_scoreboard_player(scoreboard_id: str, player: schemas.ScoreboardPl
     db.refresh(db_player)
     
     # Broadcast update
-    await manager.broadcast(f"scoreboard:{scoreboard.share_code}", {
+    await manager.broadcast(f"scoreboard:{scoreboard.share_code.upper()}", {
         "type": "player_added",
         "data": {"id": db_player.id, "name": db_player.name, "score": db_player.score, "color": db_player.color}
     })
@@ -1494,7 +1641,7 @@ async def update_scoreboard_player(player_id: str, player: schemas.ScoreboardPla
     scoreboard = db.query(models.Scoreboard).filter(models.Scoreboard.id == db_player.scoreboard_id).first()
     
     # Broadcast update
-    await manager.broadcast(f"scoreboard:{scoreboard.share_code}", {
+    await manager.broadcast(f"scoreboard:{scoreboard.share_code.upper()}", {
         "type": "player_updated",
         "data": {"id": db_player.id, "name": db_player.name, "score": db_player.score, "color": db_player.color}
     })
@@ -1515,7 +1662,7 @@ async def delete_scoreboard_player(player_id: str, db: Session = Depends(get_db)
     
     # Broadcast update
     if scoreboard:
-        await manager.broadcast(f"scoreboard:{scoreboard.share_code}", {
+        await manager.broadcast(f"scoreboard:{scoreboard.share_code.upper()}", {
             "type": "player_removed",
             "data": {"id": player_id}
         })
@@ -1628,7 +1775,7 @@ def standalone_game_to_response(game: models.StandaloneGame) -> dict:
         "status": game.status,
         "quarter": game.quarter,
         "game_time": game.game_time,
-        "scheduled_at": game.scheduled_at,
+        "scheduled_at": game.scheduled_at.isoformat() if game.scheduled_at else None,
         "share_code": game.share_code,
         "down": game.down,
         "distance": game.distance,
@@ -1642,8 +1789,15 @@ def standalone_game_to_response(game: models.StandaloneGame) -> dict:
         "timer_enabled": game.timer_enabled,
         "timer_seconds": game.timer_seconds,
         "timer_running": game.timer_running,
-        "created_at": game.created_at,
-        "updated_at": game.updated_at,
+        "timer_started_at": game.timer_started_at.isoformat() if game.timer_started_at else None,
+        "timer_started_seconds": game.timer_started_seconds,
+        "quarter_length": game.quarter_length or "15:00",
+        "halftime_length": game.halftime_length or "20:00",
+        "overtime_length": game.overtime_length or "10:00",
+        "play_clock_duration": game.play_clock_duration or 40,
+        "timeouts_per_half": game.timeouts_per_half or 3,
+        "created_at": game.created_at.isoformat() if game.created_at else None,
+        "updated_at": game.updated_at.isoformat() if game.updated_at else None,
     }
 
 
@@ -1716,16 +1870,24 @@ async def update_standalone_game(
     db: Session = Depends(get_db),
     current_user: Optional[models.User] = Depends(auth.get_current_user)
 ):
+    print(f"[API] update_standalone_game called for game_id={game_id}")
     db_game = db.query(models.StandaloneGame).filter(models.StandaloneGame.id == game_id).first()
     if not db_game:
         raise HTTPException(status_code=404, detail="Game not found")
+    print(f"[API] Found standalone game with share_code={db_game.share_code}")
     
     # Check ownership if game has an owner
     if db_game.owner_id and current_user and db_game.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this game")
     
+    # Store notification before updating (it's transient, not stored in DB)
+    notification = game.notification
+    if notification:
+        print(f"[API] Standalone game update received notification: {notification}")
+    
     for key, value in game.model_dump(exclude_unset=True).items():
-        setattr(db_game, key, value)
+        if key != 'notification':  # Skip notification, it's not a DB field
+            setattr(db_game, key, value)
     
     db_game.updated_at = datetime.utcnow()
     db.commit()
@@ -1733,12 +1895,17 @@ async def update_standalone_game(
     
     # Broadcast update via WebSocket
     response_data = standalone_game_to_response(db_game)
-    await manager.broadcast(f"game:{db_game.share_code}", {
+    
+    # Include notification if present (transient, not stored in DB)
+    if notification:
+        response_data["notification"] = notification
+    
+    await manager.broadcast(f"game:{db_game.share_code.upper()}", {
         "type": "game_update",
         "data": response_data
     })
     
-    return response_data
+    return standalone_game_to_response(db_game)  # Return without notification
 
 
 @app.post("/api/standalone-games/{game_id}/heartbeat")
@@ -1767,7 +1934,7 @@ async def check_standalone_game_heartbeat(game_id: str, db: Session = Depends(ge
             db.commit()
             
             response_data = standalone_game_to_response(db_game)
-            await manager.broadcast(f"game:{db_game.share_code}", {
+            await manager.broadcast(f"game:{db_game.share_code.upper()}", {
                 "type": "game_update",
                 "data": response_data
             })
@@ -1831,7 +1998,7 @@ async def upload_standalone_game_logo(
     
     # Broadcast update via WebSocket
     response_data = standalone_game_to_response(db_game)
-    await manager.broadcast(f"game:{db_game.share_code}", {
+    await manager.broadcast(f"game:{db_game.share_code.upper()}", {
         "type": "game_update",
         "data": response_data
     })
@@ -1887,6 +2054,19 @@ async def bracket_websocket(websocket: WebSocket, share_code: str):
 @app.websocket("/ws/scoreboard/{share_code}")
 async def scoreboard_websocket(websocket: WebSocket, share_code: str):
     room = f"scoreboard:{share_code.upper()}"
+    await manager.connect(websocket, room)
+    try:
+        while True:
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, room)
+        await manager.broadcast_viewer_count(room)
+
+
+@app.websocket("/ws/league/{share_code}")
+async def league_websocket(websocket: WebSocket, share_code: str):
+    """WebSocket for league-wide updates (game status changes, etc.)"""
+    room = f"league:{share_code.upper()}"
     await manager.connect(websocket, room)
     try:
         while True:
@@ -2011,6 +2191,241 @@ async def delete_invite(
     db.delete(invite)
     db.commit()
     return {"message": "Invite deleted"}
+
+
+# ============== Follow & Notification Endpoints ==============
+
+@app.get("/api/follows", response_model=list[schemas.UserFollow])
+async def get_user_follows(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Get all follows for the current user"""
+    return db.query(models.UserFollow).filter(models.UserFollow.user_id == current_user.id).all()
+
+
+@app.post("/api/follows", response_model=schemas.UserFollow)
+async def create_follow(
+    follow: schemas.UserFollowCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Follow a league or game"""
+    # Check if already following
+    existing = db.query(models.UserFollow).filter(
+        models.UserFollow.user_id == current_user.id,
+        models.UserFollow.league_id == follow.league_id,
+        models.UserFollow.game_id == follow.game_id
+    ).first()
+    if existing:
+        return existing
+    
+    db_follow = models.UserFollow(
+        user_id=current_user.id,
+        league_id=follow.league_id,
+        game_id=follow.game_id
+    )
+    db.add(db_follow)
+    db.commit()
+    db.refresh(db_follow)
+    return db_follow
+
+
+@app.delete("/api/follows/{follow_id}")
+async def delete_follow(
+    follow_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Unfollow a league or game"""
+    follow = db.query(models.UserFollow).filter(
+        models.UserFollow.id == follow_id,
+        models.UserFollow.user_id == current_user.id
+    ).first()
+    if not follow:
+        raise HTTPException(status_code=404, detail="Follow not found")
+    
+    db.delete(follow)
+    db.commit()
+    return {"message": "Unfollowed"}
+
+
+@app.delete("/api/follows/league/{league_id}")
+async def unfollow_league(
+    league_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Unfollow a league by league ID"""
+    follow = db.query(models.UserFollow).filter(
+        models.UserFollow.league_id == league_id,
+        models.UserFollow.user_id == current_user.id
+    ).first()
+    if follow:
+        db.delete(follow)
+        db.commit()
+    return {"message": "Unfollowed"}
+
+
+@app.delete("/api/follows/game/{game_id}")
+async def unfollow_game(
+    game_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Unfollow a game by game ID"""
+    follow = db.query(models.UserFollow).filter(
+        models.UserFollow.game_id == game_id,
+        models.UserFollow.user_id == current_user.id
+    ).first()
+    if follow:
+        db.delete(follow)
+        db.commit()
+    return {"message": "Unfollowed"}
+
+
+@app.get("/api/notification-preferences", response_model=schemas.NotificationPreferences)
+async def get_notification_preferences(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Get notification preferences for current user"""
+    prefs = db.query(models.NotificationPreferences).filter(
+        models.NotificationPreferences.user_id == current_user.id
+    ).first()
+    if not prefs:
+        # Create default preferences
+        prefs = models.NotificationPreferences(user_id=current_user.id)
+        db.add(prefs)
+        db.commit()
+        db.refresh(prefs)
+    return prefs
+
+
+@app.put("/api/notification-preferences", response_model=schemas.NotificationPreferences)
+async def update_notification_preferences(
+    prefs_update: schemas.NotificationPreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Update notification preferences"""
+    prefs = db.query(models.NotificationPreferences).filter(
+        models.NotificationPreferences.user_id == current_user.id
+    ).first()
+    if not prefs:
+        prefs = models.NotificationPreferences(user_id=current_user.id)
+        db.add(prefs)
+    
+    for key, value in prefs_update.model_dump(exclude_unset=True).items():
+        setattr(prefs, key, value)
+    
+    db.commit()
+    db.refresh(prefs)
+    return prefs
+
+
+@app.post("/api/push-subscriptions")
+async def create_push_subscription(
+    subscription: schemas.PushSubscriptionCreate,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """Register a push subscription"""
+    # Check if endpoint already exists
+    existing = db.query(models.PushSubscription).filter(
+        models.PushSubscription.endpoint == subscription.endpoint
+    ).first()
+    
+    if existing:
+        # Update user_id if logged in
+        if current_user:
+            existing.user_id = current_user.id
+            db.commit()
+        return {"message": "Subscription updated"}
+    
+    db_sub = models.PushSubscription(
+        user_id=current_user.id if current_user else None,
+        endpoint=subscription.endpoint,
+        p256dh=subscription.p256dh,
+        auth=subscription.auth
+    )
+    db.add(db_sub)
+    db.commit()
+    return {"message": "Subscription created"}
+
+
+@app.delete("/api/push-subscriptions")
+async def delete_push_subscription(
+    endpoint: str,
+    db: Session = Depends(get_db)
+):
+    """Remove a push subscription"""
+    sub = db.query(models.PushSubscription).filter(
+        models.PushSubscription.endpoint == endpoint
+    ).first()
+    if sub:
+        db.delete(sub)
+        db.commit()
+    return {"message": "Subscription removed"}
+
+
+@app.post("/api/test-notification")
+async def test_notification(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Send a test notification to the current user"""
+    subscriptions = db.query(models.PushSubscription).filter(
+        models.PushSubscription.user_id == current_user.id
+    ).all()
+    
+    if not subscriptions:
+        raise HTTPException(status_code=400, detail="No push subscriptions found. Please enable notifications first.")
+    
+    sent = 0
+    for sub in subscriptions:
+        subscription_info = {
+            "endpoint": sub.endpoint,
+            "keys": {
+                "p256dh": sub.p256dh,
+                "auth": sub.auth
+            }
+        }
+        result = notifications.send_push_notification(
+            subscription_info,
+            "Test Notification",
+            "Push notifications are working! 🎉",
+            {"url": "/"}
+        )
+        if result:
+            sent += 1
+    
+    return {"message": f"Sent {sent} notification(s)"}
+
+
+# Serve frontend static files
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.exists(FRONTEND_DIR):
+    # Serve static assets
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIR, "assets")), name="frontend_assets")
+    
+    # Serve other static files (favicon, logo, etc.)
+    @app.get("/favicon.png")
+    async def favicon():
+        return FileResponse(os.path.join(FRONTEND_DIR, "favicon.png"))
+    
+    @app.get("/logo.png")
+    async def logo():
+        return FileResponse(os.path.join(FRONTEND_DIR, "logo.png"))
+    
+    @app.get("/sw.js")
+    async def service_worker():
+        return FileResponse(os.path.join(FRONTEND_DIR, "sw.js"), media_type="application/javascript")
+    
+    # Catch-all for SPA routing - must be last
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 
 if __name__ == "__main__":

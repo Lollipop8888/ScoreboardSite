@@ -1,10 +1,14 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Share2, Trophy, ExternalLink, Users, Calendar } from 'lucide-react'
+import { Share2, Trophy, ExternalLink, Users, Calendar, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { GameScoreboardDisplay } from '@/components/GameScoreboardDisplay'
 import { gameApi, standaloneGameApi, bracketApi, scoreboardApi, leagueApi, createWebSocket } from '@/lib/api'
+import { QRCodeSVG } from 'qrcode.react'
 
 export default function SharePage() {
   const { type, code } = useParams()
@@ -56,6 +60,10 @@ export default function SharePage() {
       if (message.type === 'viewer_count') {
         setViewerCount(message.count)
       } else if (type === 'game' && message.type === 'game_update') {
+        console.log('[SharePage WS] Received game_update:', message.data)
+        if (message.data.notification) {
+          console.log('[SharePage WS] Notification in update:', message.data.notification)
+        }
         setData((prev) => ({ ...prev, ...message.data }))
       } else if (type === 'scoreboard') {
         if (message.type === 'player_updated') {
@@ -137,39 +145,199 @@ export default function SharePage() {
   return null
 }
 
-function SharedGame({ game, viewerCount }) {
-  const [liveGameTime, setLiveGameTime] = useState(null)
+// Reusable Share Button with Dialog
+function ShareButtonWithDialog({ type, code, name }) {
+  const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
   
-  // Live clock calculation - update every second when timer is running
+  const shareUrl = `${window.location.origin}/share/${type}/${code}`
+  const typeLabel = type === 'game' ? 'Game' : type === 'league' ? 'League' : type === 'bracket' ? 'Bracket' : 'Scoreboard'
+  
+  function copyToClipboard(text) {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  
+  return (
+    <>
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="gap-2"
+        onClick={() => setOpen(true)}
+      >
+        <Share2 className="h-4 w-4" />
+        Share
+      </Button>
+      
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Share {typeLabel}</DialogTitle>
+            <DialogDescription>{name}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {/* Share Code */}
+            <div className="space-y-2">
+              <Label className="text-sm text-slate-500">Share Code</Label>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 bg-slate-100 dark:bg-slate-800 rounded-lg px-4 py-3 text-center">
+                  <span className="text-2xl font-bold font-mono tracking-wider">{code}</span>
+                </div>
+                <Button variant="outline" size="icon" onClick={() => copyToClipboard(code)}>
+                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+            
+            {/* Share Link */}
+            <div className="space-y-2">
+              <Label className="text-sm text-slate-500">Share Link</Label>
+              <div className="flex items-center gap-2">
+                <Input 
+                  readOnly 
+                  value={shareUrl}
+                  className="text-xs font-mono"
+                />
+                <Button variant="outline" size="icon" onClick={() => copyToClipboard(shareUrl)}>
+                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+            
+            {/* QR Code */}
+            <div className="space-y-2 pt-2 border-t">
+              <Label className="text-sm text-slate-500">QR Code</Label>
+              <div className="flex justify-center p-4 bg-white dark:bg-slate-200 rounded-lg">
+                <QRCodeSVG 
+                  value={shareUrl}
+                  size={150}
+                  level="M"
+                  includeMargin={true}
+                />
+              </div>
+              <p className="text-xs text-slate-400 text-center">
+                Scan to view the live {typeLabel.toLowerCase()}
+              </p>
+            </div>
+            
+            {/* OBS URL for games */}
+            {type === 'game' && (
+              <div className="space-y-2 pt-2 border-t">
+                <Label className="text-sm text-slate-500">OBS Browser Source URL</Label>
+                <Input 
+                  readOnly 
+                  value={`${window.location.origin}/obs/${code}`}
+                  className="text-xs font-mono"
+                />
+                <p className="text-xs text-slate-400">
+                  Add <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">?compact=true</code> for scorebug style
+                </p>
+              </div>
+            )}
+            
+            {/* Share via Email/SMS */}
+            <div className="space-y-2 pt-2 border-t">
+              <Label className="text-sm text-slate-500">Share via</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => {
+                    const subject = encodeURIComponent(`Watch: ${name}`)
+                    const body = encodeURIComponent(`Check out this ${typeLabel.toLowerCase()}!\n\n${name}\nShare Code: ${code}\n\nView here: ${shareUrl}`)
+                    window.open(`mailto:?subject=${subject}&body=${body}`, '_blank')
+                  }}
+                >
+                  📧 Email
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => {
+                    const message = encodeURIComponent(`Check out this ${typeLabel.toLowerCase()}! ${name}\n\nCode: ${code}\n${shareUrl}`)
+                    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+                      window.open(`sms:?body=${message}`, '_blank')
+                    } else {
+                      copyToClipboard(decodeURIComponent(message))
+                    }
+                  }}
+                >
+                  💬 Text/SMS
+                </Button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => {
+                    const text = encodeURIComponent(`${name} 🏈`)
+                    window.open(`https://twitter.com/intent/tweet?text=${text}&url=${encodeURIComponent(shareUrl)}`, '_blank', 'width=550,height=420')
+                  }}
+                >
+                  𝕏
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => {
+                    window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank', 'width=550,height=420')
+                  }}
+                >
+                  📘
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 text-xs"
+                  onClick={() => {
+                    const text = encodeURIComponent(`${name} 🏈 ${shareUrl}`)
+                    window.open(`https://wa.me/?text=${text}`, '_blank')
+                  }}
+                >
+                  💚
+                </Button>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function SharedGame({ game, viewerCount }) {
+  const [notification, setNotification] = useState(null)
+  const [notificationVisible, setNotificationVisible] = useState(false)
+  const lastNotificationIdRef = useRef(null)
+  
+  // Handle incoming notifications
   useEffect(() => {
-    if (!game?.timer_running || !game?.timer_started_at || game?.timer_started_seconds === null) {
-      setLiveGameTime(null)
-      return
+    console.log('[SharePage] game.notification changed:', game?.notification)
+    if (game?.notification && game.notification.id !== lastNotificationIdRef.current) {
+      console.log('[SharePage] Showing notification:', game.notification)
+      lastNotificationIdRef.current = game.notification.id
+      setNotification(game.notification)
+      setNotificationVisible(true)
+      
+      // Auto-hide after 5 seconds
+      const timer = setTimeout(() => {
+        setNotificationVisible(false)
+      }, 5000)
+      
+      return () => clearTimeout(timer)
     }
-    
-    const calculateLiveTime = () => {
-      const startedAt = new Date(game.timer_started_at)
-      const now = new Date()
-      const elapsedSeconds = Math.floor((now - startedAt) / 1000)
-      // Sanity check: elapsed time should be positive and reasonable
-      if (elapsedSeconds < 0 || elapsedSeconds > 86400) {
-        setLiveGameTime(null)
-        return
-      }
-      const currentSeconds = Math.max(0, game.timer_started_seconds - elapsedSeconds)
-      const mins = Math.floor(currentSeconds / 60)
-      const secs = currentSeconds % 60
-      setLiveGameTime(`${mins}:${secs.toString().padStart(2, '0')}`)
-    }
-    
-    // Calculate immediately
-    calculateLiveTime()
-    
-    // Update every second
-    const interval = setInterval(calculateLiveTime, 1000)
-    
-    return () => clearInterval(interval)
-  }, [game?.timer_running, game?.timer_started_at, game?.timer_started_seconds])
+  }, [game?.notification])
 
   // Parse display state from JSON - handle both string and object
   let displayState = {}
@@ -189,13 +357,44 @@ function SharedGame({ game, viewerCount }) {
      game.quarter === 'Final' ? 'final' : 
      game.quarter === 'Halftime' ? 'halftime-show' : null)
 
-  // Create game object with live time
-  const gameWithLiveTime = liveGameTime ? { ...game, game_time: liveGameTime } : game
-
   return (
-    <div className="max-w-2xl mx-auto space-y-4">
+    <div className="max-w-2xl mx-auto space-y-4 relative">
+      {/* Notification Toast */}
+      {notificationVisible && notification && (
+        <div 
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-4 rounded-xl shadow-2xl animate-bounce-in max-w-md ${
+            notification.type === 'score' ? 'bg-gradient-to-r from-green-600 to-green-500 text-white' :
+            notification.type === 'touchdown' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white' :
+            notification.type === 'turnover' ? 'bg-gradient-to-r from-red-600 to-red-500 text-white' :
+            notification.type === 'custom' ? 'bg-gradient-to-r from-blue-600 to-blue-500 text-white' :
+            'bg-gradient-to-r from-slate-800 to-slate-700 text-white'
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            <span className="text-2xl flex-shrink-0">
+              {notification.type === 'score' ? '🏈' :
+               notification.type === 'touchdown' ? '🎉' :
+               notification.type === 'turnover' ? '🔄' :
+               '🔔'}
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="font-bold text-lg leading-tight">{notification.title || 'Notification'}</p>
+              {notification.message && (
+                <p className="text-sm opacity-90 mt-0.5">{notification.message}</p>
+              )}
+            </div>
+            <button 
+              onClick={() => setNotificationVisible(false)}
+              className="text-white/70 hover:text-white flex-shrink-0 ml-2"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+      
       <GameScoreboardDisplay 
-        game={gameWithLiveTime}
+        game={game}
         displayState={displayState}
         possession={game.possession}
         down={game.down}
@@ -206,9 +405,16 @@ function SharedGame({ game, viewerCount }) {
         gameStatus={gameStatus}
         viewerCount={viewerCount}
       />
-      <p className="text-center text-sm text-slate-500">
-        Watching live • Updates automatically
-      </p>
+      <div className="flex items-center justify-center gap-4">
+        <p className="text-sm text-slate-500">
+          Watching live • Updates automatically
+        </p>
+        <ShareButtonWithDialog 
+          type="game" 
+          code={game.share_code} 
+          name={`${game.away_team?.name || 'Away'} vs ${game.home_team?.name || 'Home'}`} 
+        />
+      </div>
     </div>
   )
 }
@@ -270,9 +476,16 @@ function SharedScoreboard({ scoreboard }) {
         </div>
       )}
 
-      <p className="text-center text-sm text-slate-500">
-        Watching live • Updates automatically
-      </p>
+      <div className="flex items-center justify-center gap-4">
+        <p className="text-sm text-slate-500">
+          Watching live • Updates automatically
+        </p>
+        <ShareButtonWithDialog 
+          type="scoreboard" 
+          code={scoreboard.share_code} 
+          name={scoreboard.name} 
+        />
+      </div>
     </div>
   )
 }
@@ -374,9 +587,16 @@ function SharedBracket({ bracket }) {
         </div>
       </div>
 
-      <p className="text-center text-sm text-slate-500">
-        Watching live • Updates automatically
-      </p>
+      <div className="flex items-center justify-center gap-4">
+        <p className="text-sm text-slate-500">
+          Watching live • Updates automatically
+        </p>
+        <ShareButtonWithDialog 
+          type="bracket" 
+          code={bracket.share_code} 
+          name={bracket.name} 
+        />
+      </div>
     </div>
   )
 }
@@ -418,6 +638,13 @@ function SharedLeague({ league }) {
       <div className="text-center">
         <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{league.name}</h1>
         <p className="text-slate-600 dark:text-slate-400 mt-1">{league.sport} - {league.season}</p>
+        <div className="mt-3">
+          <ShareButtonWithDialog 
+            type="league" 
+            code={league.share_code} 
+            name={league.name} 
+          />
+        </div>
       </div>
 
       {loading ? (
@@ -442,10 +669,14 @@ function SharedLeague({ league }) {
                   {standings.map((team, index) => (
                     <div key={team.id} className="flex items-center gap-3 p-2 rounded-lg bg-slate-50 dark:bg-slate-800">
                       <span className="font-bold text-slate-400 w-6">{index + 1}</span>
-                      <div
-                        className="h-4 w-4 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: team.color }}
-                      />
+                      {team.logo_url ? (
+                        <img src={team.logo_url} alt="" className="h-5 w-5 object-contain flex-shrink-0" />
+                      ) : (
+                        <div
+                          className="h-4 w-4 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: team.color }}
+                        />
+                      )}
                       <span className="font-medium flex-1 truncate">{team.name}</span>
                       <span className="text-sm font-semibold text-green-600">{team.wins || 0}W</span>
                       <span className="text-sm font-semibold text-red-600">{team.losses || 0}L</span>
@@ -473,20 +704,28 @@ function SharedLeague({ league }) {
                     <div key={game.id} className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <div
-                            className="h-3 w-3 rounded-full"
-                            style={{ backgroundColor: game.away_team?.color }}
-                          />
+                          {game.away_team?.logo_url ? (
+                            <img src={game.away_team.logo_url} alt="" className="h-4 w-4 object-contain" />
+                          ) : (
+                            <div
+                              className="h-3 w-3 rounded-full"
+                              style={{ backgroundColor: game.away_team?.color }}
+                            />
+                          )}
                           <span className="font-medium text-sm">{game.away_team?.abbreviation || 'TBD'}</span>
                         </div>
                         <span className="font-bold">{game.away_score}</span>
                       </div>
                       <div className="flex items-center justify-between mt-1">
                         <div className="flex items-center gap-2">
-                          <div
-                            className="h-3 w-3 rounded-full"
-                            style={{ backgroundColor: game.home_team?.color }}
-                          />
+                          {game.home_team?.logo_url ? (
+                            <img src={game.home_team.logo_url} alt="" className="h-4 w-4 object-contain" />
+                          ) : (
+                            <div
+                              className="h-3 w-3 rounded-full"
+                              style={{ backgroundColor: game.home_team?.color }}
+                            />
+                          )}
                           <span className="font-medium text-sm">{game.home_team?.abbreviation || 'TBD'}</span>
                         </div>
                         <span className="font-bold">{game.home_score}</span>
