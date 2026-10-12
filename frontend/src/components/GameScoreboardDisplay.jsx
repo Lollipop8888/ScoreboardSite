@@ -1,4 +1,5 @@
 import { Flag } from 'lucide-react'
+import { getOvertimeRules } from '@/lib/overtime'
 import { useState, useEffect, Component } from 'react'
 import { AnimatedScore } from '@/components/ui/animated-score'
 
@@ -108,6 +109,7 @@ export function GameScoreboardDisplay({
   displayStats,
   quickStats,
   timeOfPossession,
+  showOTRules,
   viewerCount,
   showCoinToss,
   coinTossData,
@@ -187,6 +189,7 @@ export function GameScoreboardDisplay({
   displayStats = displayStats ?? displayState?.displayStats ?? { show: false, quarterScores: false, turnovers: false, firstDowns: false, penalties: false, all: false }
   quickStats = quickStats ?? displayState?.quickStats ?? { home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 }, away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 } }
   timeOfPossession = timeOfPossession ?? displayState?.timeOfPossession ?? { home: 0, away: 0 }
+  showOTRules = showOTRules ?? displayState?.showOTRules ?? false
   const formatTOP = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
   const conversions = (team, key) => `${quickStats?.[team]?.[`${key}Conv`] || 0}/${quickStats?.[team]?.[`${key}Att`] || 0}`
   const showTeamStats = displayStats?.turnovers || displayStats?.firstDowns || displayStats?.penalties || displayStats?.thirdDowns || displayStats?.fourthDowns || displayStats?.timeOfPossession || displayStats?.customStats?.length > 0
@@ -1623,6 +1626,28 @@ export function GameScoreboardDisplay({
       </div>
       </div>
       
+      {/* Overtime Rules - bottom panel, below the scores so it never covers them */}
+      {showOTRules && (() => {
+        const rules = getOvertimeRules(game.ot_format, game.overtime_length)
+        return (
+          <div className="w-full mt-3 rounded-xl p-4 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 ring-1 ring-indigo-400/40 shadow-[0_0_30px_rgba(99,102,241,0.25)] animate-slide-up">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <span className="text-xs font-black tracking-[0.2em] text-amber-400">OVERTIME RULES</span>
+              <span className="text-slate-500">·</span>
+              <span className="text-sm font-bold text-white uppercase tracking-wide">{rules.title}</span>
+            </div>
+            <ul className="space-y-1.5 max-w-xl mx-auto">
+              {rules.lines.map(line => (
+                <li key={line} className="flex items-start gap-2 text-sm text-slate-200 leading-snug">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      })()}
+
       {/* Stats Bottom Bar - integrated display */}
       {displayStats?.show && (displayStats.quarterScores || showTeamStats) && (
         <div className="w-full mt-3 bg-slate-800/90 rounded-xl p-3 animate-slide-up">

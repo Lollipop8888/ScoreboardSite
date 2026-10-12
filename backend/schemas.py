@@ -401,6 +401,7 @@ class GameWithTeams(BaseModel):
     onside_alt_distance: Optional[int] = 15  # From league settings
     four_point_fg_enabled: Optional[bool] = False  # From league settings
     four_point_fg_distance: Optional[int] = 50  # From league settings
+    ot_format: Optional[str] = "nfl"  # From league settings (game_defaults.ot_format)
     created_at: datetime
     updated_at: datetime
 

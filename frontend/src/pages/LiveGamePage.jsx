@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { getOvertimeRules } from '@/lib/overtime'
 import { useParams } from 'react-router-dom'
 import { Plus, Minus, Play, Square, Share2, Copy, Check, Trophy, RotateCcw, Flag, Pause, Volume2, Bell, Search, X, Eye, EyeOff, Video, Upload, Trash2, Zap, Send, Settings, Keyboard } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -232,6 +233,8 @@ export default function LiveGamePage({ standalone = false }) {
   
   // OT score end game prompt state
   const [showOTEndPrompt, setShowOTEndPrompt] = useState(false)
+  // Overtime rules panel on the scoreboard: shown when OT starts, hidden when the clock starts
+  const [showOTRules, setShowOTRules] = useState(false)
   
   // Go for it on 4th down - hides the 4th down options
   const [goingForIt, setGoingForIt] = useState(false)
@@ -443,6 +446,7 @@ export default function LiveGamePage({ standalone = false }) {
           if (savedState.coinToss) setCoinToss(savedState.coinToss)
           // Restore time of possession
           if (savedState.timeOfPossession) setTimeOfPossession(savedState.timeOfPossession)
+          if (savedState.showOTRules) setShowOTRules(true)
           // Restore game log
           if (savedState.gameLog) setGameLog(savedState.gameLog)
           // Restore visibility settings
@@ -958,6 +962,8 @@ export default function LiveGamePage({ standalone = false }) {
     } else if (game.quarter !== 'Pregame') {
       addGameLogEntry('quarter', `Start of ${game.quarter}`)
     }
+    // Going into overtime: put the OT rules up on the scoreboard
+    if (game.quarter === 'OT' && !last.quarter?.startsWith('OT')) setShowOTRules(true)
   }, [game?.id, game?.quarter])
 
   // Points by quarter follow the score itself, so every way of scoring (TD, PAT, 2PT, FG, safety,
@@ -1067,6 +1073,7 @@ export default function LiveGamePage({ standalone = false }) {
       coinTossData: coinToss,
       timeOfPossession,
       gameLog,
+      showOTRules,
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -1084,7 +1091,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -1675,6 +1682,7 @@ export default function LiveGamePage({ standalone = false }) {
     if (timerRunningRef.current) return
     timerRunningRef.current = true
     setTimerRunning(true)
+    setShowOTRules(false) // Play is starting; take the OT rules down
     
     // Save timer state to backend for persistence
     const currentSeconds = parseTime(game?.game_time || '15:00')
@@ -3279,6 +3287,7 @@ export default function LiveGamePage({ standalone = false }) {
               displayStats={displayStats}
               quickStats={quickStats}
               timeOfPossession={timeOfPossession}
+              showOTRules={showOTRules}
               showCoinToss={showCoinToss}
               coinTossData={coinToss}
             />
@@ -4270,6 +4279,31 @@ export default function LiveGamePage({ standalone = false }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Overtime Rules - available in Q4 (in case it ends tied) and during OT */}
+            {(game.quarter === 'Q4' || game.quarter?.startsWith('OT')) && (() => {
+              const rules = getOvertimeRules(game.ot_format, game.overtime_length)
+              return (
+                <div className="p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-indigo-800 dark:text-indigo-300">⏱️ Overtime Rules ({rules.title})</p>
+                    <Button
+                      size="sm"
+                      variant={showOTRules ? "default" : "outline"}
+                      className={showOTRules ? "bg-indigo-600 hover:bg-indigo-700" : "border-indigo-400 text-indigo-700 dark:text-indigo-300"}
+                      onClick={() => setShowOTRules(prev => !prev)}
+                    >
+                      {showOTRules ? '📺 Hide' : '📺 Show on Scoreboard'}
+                    </Button>
+                  </div>
+                  <ul className="text-xs text-indigo-700 dark:text-indigo-300 list-disc pl-4 space-y-0.5">
+                    {rules.lines.map(line => <li key={line}>{line}</li>)}
+                  </ul>
+                  <p className="text-[11px] text-indigo-600/70 dark:text-indigo-400/70">
+                    Shows automatically when overtime starts and hides when the clock starts. Change the format in League Settings.
+                  </p>
+                </div>
+              )
+            })()}
             {/* Coin Toss - Pregame or OT */}
             {(game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && !coinToss.winner && (
               <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
