@@ -751,6 +751,7 @@ export default function LiveGamePage({ standalone = false }) {
           break
         case 'firstDown':
           // Show first down overlay and reset downs (don't stop game clock)
+          recordPlayResult('firstDown')
           setShowFirstDown(true)
           setTimeout(() => setShowFirstDown(false), 3000)
           setDown(1)
@@ -780,10 +781,11 @@ export default function LiveGamePage({ standalone = false }) {
           
         // Play Results
         case 'incomplete':
+          // Same as the Incomplete button: on 4th down this asks to confirm a turnover on downs
           stopTimer()
           setShowIncomplete(true)
           setTimeout(() => setShowIncomplete(false), 2000)
-          setDown(prev => prev < 4 ? prev + 1 : 1)
+          nextDown()
           resetPlayClock(40)
           startPlayClock(40, true)
           break
@@ -798,6 +800,7 @@ export default function LiveGamePage({ standalone = false }) {
           break
         case 'turnover':
           stopTimer()
+          recordPlayResult('turnover')
           setShowTurnover(possession === 'home' ? 'away' : 'home')
           setTimeout(() => setShowTurnover(null), 3000)
           setPossession(prev => prev === 'home' ? 'away' : 'home')
@@ -900,6 +903,46 @@ export default function LiveGamePage({ standalone = false }) {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [game, timerRunning, awayTimeouts, homeTimeouts, possession, playClockRunning, playClock, down, showPATAttempt, showFGAttempt, showInjury, keybindsEnabled])
+
+  // Points by quarter follow the score itself, so every way of scoring (TD, PAT, 2PT, FG, safety,
+  // manual +/-) is counted, and corrections take points back off.
+  const lastScoresRef = useRef(null)
+  useEffect(() => {
+    if (!game) return
+    const scores = { id: game.id, home: game.home_score || 0, away: game.away_score || 0 }
+    const last = lastScoresRef.current
+    lastScoresRef.current = scores
+    // First load (stats were restored from the saved state) or a different game: nothing to add
+    if (!last || last.id !== scores.id) return
+
+    const qtr = game.quarter || 'Q1'
+    const qKey = qtr.startsWith('OT') ? 'ot' : qtr.toLowerCase()
+    const quarterKeys = ['q1', 'q2', 'q3', 'q4', 'ot']
+    for (const team of ['home', 'away']) {
+      const delta = scores[team] - last[team]
+      if (delta === 0) continue
+      setQuickStats(s => {
+        const t = { ...s[team] }
+        if (scores[team] === 0) {
+          // Score reset
+          quarterKeys.forEach(k => { t[k] = 0 })
+        } else if (delta > 0) {
+          if (!quarterKeys.includes(qKey)) return s
+          t[qKey] = (t[qKey] || 0) + delta
+        } else {
+          // Take a correction off the current quarter first, then earlier ones
+          let remaining = -delta
+          const upTo = quarterKeys.includes(qKey) ? quarterKeys.indexOf(qKey) : quarterKeys.length - 1
+          for (let i = upTo; i >= 0 && remaining > 0; i--) {
+            const take = Math.min(t[quarterKeys[i]] || 0, remaining)
+            t[quarterKeys[i]] = (t[quarterKeys[i]] || 0) - take
+            remaining -= take
+          }
+        }
+        return { ...s, [team]: t }
+      })
+    }
+  }, [game?.id, game?.home_score, game?.away_score])
 
   // Sync game state to backend when key values change
   useEffect(() => {
@@ -1093,17 +1136,9 @@ export default function LiveGamePage({ standalone = false }) {
     const newScore = Math.max(0, currentScore + delta)
     console.log('Updating score:', { field, currentScore, newScore })
     
-    // Track points by quarter in quick stats
-    if (delta > 0) {
-      const qtr = game.quarter || 'Q1'
-      const qKey = qtr.startsWith('OT') ? 'ot' : qtr.toLowerCase()
-      if (['q1', 'q2', 'q3', 'q4', 'ot'].includes(qKey)) {
-        setQuickStats(s => ({
-          ...s,
-          [team]: {...s[team], [qKey]: s[team][qKey] + delta}
-        }))
-      }
-    }
+    // Points by quarter are tracked from score changes (see the quick stats effect)
+    // An offensive TD on 3rd/4th down is a conversion
+    if (delta >= 6 && delta <= 8 && team === possession) recordPlayResult('touchdown')
     
     // Trigger celebration overlay for TDs, FGs, Safeties, and conversions
     if (delta === 6 || delta === 7 || delta === 8) {
@@ -1131,16 +1166,6 @@ export default function LiveGamePage({ standalone = false }) {
     const field = team === 'home' ? 'home_score' : 'away_score'
     const currentScore = team === 'home' ? game.home_score : game.away_score
     const newScore = currentScore + 2
-    
-    // Track points by quarter in quick stats
-    const qtr = game.quarter || 'Q1'
-    const qKey = qtr.startsWith('OT') ? 'ot' : qtr.toLowerCase()
-    if (['q1', 'q2', 'q3', 'q4', 'ot'].includes(qKey)) {
-      setQuickStats(s => ({
-        ...s,
-        [team]: {...s[team], [qKey]: s[team][qKey] + 2}
-      }))
-    }
     
     await updateGame({ [field]: newScore })
     setScoreCelebration({ type: 'safety', team, points: 2 })
@@ -1781,9 +1806,34 @@ export default function LiveGamePage({ standalone = false }) {
     }
   }
 
+  // Automatic quick stats for the team with the ball, based on how the current down ended:
+  //   'firstDown'        - gained a first down (counts a 3rd/4th down conversion)
+  //   'penaltyFirstDown' - first down from a defensive penalty (no down attempt; the play didn't count)
+  //   'touchdown'        - offensive TD (counts a 3rd/4th down conversion)
+  //   'failed'           - didn't convert: next down, incomplete, turnover on downs
+  //   'turnover'         - interception or lost fumble (a turnover and a failed 3rd/4th down)
+  // Punts and field goals aren't down attempts, so they aren't recorded here.
+  function recordPlayResult(result) {
+    const team = possession
+    if (team !== 'home' && team !== 'away') return
+    const playDown = down
+    setQuickStats(s => {
+      const t = { ...s[team] }
+      if (result === 'firstDown' || result === 'penaltyFirstDown') t.firstDowns = (t.firstDowns || 0) + 1
+      if (result === 'turnover') t.turnovers = (t.turnovers || 0) + 1
+      if ((playDown === 3 || playDown === 4) && result !== 'penaltyFirstDown') {
+        const key = playDown === 3 ? 'thirdDown' : 'fourthDown'
+        t[`${key}Att`] = (t[`${key}Att`] || 0) + 1
+        if (result === 'firstDown' || result === 'touchdown') t[`${key}Conv`] = (t[`${key}Conv`] || 0) + 1
+      }
+      return { ...s, [team]: t }
+    })
+  }
+
   // Down & Distance functions
   function nextDown() {
     if (down < 4) {
+      recordPlayResult('failed')
       setDown(down + 1)
     } else {
       // 4th down - show turnover on downs confirmation, don't auto-toggle
@@ -2190,6 +2240,7 @@ export default function LiveGamePage({ standalone = false }) {
       
       if (penalty.autoFirst && !penaltyOnOffense) {
         // Defensive penalty with auto first down
+        recordPlayResult('penaltyFirstDown')
         setDown(1)
         setDistance(10)
         setSpecialDistance(null)
@@ -2888,14 +2939,14 @@ export default function LiveGamePage({ standalone = false }) {
                 <Button
                   size="lg"
                   variant="outline"
-                  onClick={() => updateScore('away', Math.max(0, game.away_score - 1))}
+                  onClick={() => updateScore('away', -1)}
                 >
                   <Minus className="h-5 w-5" />
                 </Button>
                 <span className="text-4xl font-bold w-20 text-center">{game.away_score}</span>
                 <Button
                   size="lg"
-                  onClick={() => updateScore('away', game.away_score + 1)}
+                  onClick={() => updateScore('away', 1)}
                 >
                   <Plus className="h-5 w-5" />
                 </Button>
@@ -2906,7 +2957,7 @@ export default function LiveGamePage({ standalone = false }) {
                     key={pts}
                     size="sm"
                     variant="outline"
-                    onClick={() => updateScore('away', game.away_score + pts)}
+                    onClick={() => updateScore('away', pts)}
                   >
                     +{pts}
                   </Button>
@@ -3978,13 +4029,8 @@ export default function LiveGamePage({ standalone = false }) {
                   setShowDownOnly(false)
                   setShowFirstDown(true)
                   setTimeout(() => setShowFirstDown(false), 3000)
-                  // Track first down in quick stats (only if possession is set)
-                  if (possession && (possession === 'home' || possession === 'away')) {
-                    setQuickStats(s => ({
-                      ...s,
-                      [possession]: {...s[possession], firstDowns: (s[possession]?.firstDowns || 0) + 1}
-                    }))
-                  }
+                  // Track first down (and 3rd/4th down conversion) in quick stats
+                  recordPlayResult('firstDown')
                 }}
               >
                 ⬇️ First Down!
@@ -4899,6 +4945,7 @@ export default function LiveGamePage({ standalone = false }) {
                     onClick={() => {
                       setShowTurnoverOnDownsConfirm(false)
                       stopTimer()
+                      recordPlayResult('failed')
                       setShowTurnover('downs')
                       setBigPlay('turnover-on-downs')
                       setTimeout(() => setBigPlay(null), 4000)
@@ -4930,12 +4977,8 @@ export default function LiveGamePage({ standalone = false }) {
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
                       // Confirm turnover - no review
-                      // Track turnover in quick stats (offense loses ball)
-                      const offenseTeam = possession
-                      setQuickStats(s => ({
-                        ...s,
-                        [offenseTeam]: {...s[offenseTeam], turnovers: s[offenseTeam].turnovers + 1}
-                      }))
+                      // A turnover on downs is a failed 4th down, not a turnover in the stats
+                      recordPlayResult(pendingTurnoverReview === 'downs' ? 'failed' : 'turnover')
                       togglePossession()
                       setPendingTurnoverReview(null)
                       setTimeout(() => { 
@@ -4991,6 +5034,7 @@ export default function LiveGamePage({ standalone = false }) {
                     <Button 
                       className="bg-blue-600 hover:bg-blue-700"
                       onClick={() => {
+                        recordPlayResult('turnover')
                         togglePossession()
                         setPendingTurnoverReview(null)
                         setShowTurnover(null)
@@ -5015,10 +5059,7 @@ export default function LiveGamePage({ standalone = false }) {
                         setPendingTurnoverReview(null)
                         setShowTurnover(null)
                         // Track turnover
-                        setQuickStats(s => ({
-                          ...s,
-                          [possession]: {...s[possession], turnovers: s[possession].turnovers + 1}
-                        }))
+                        recordPlayResult('turnover')
                         // Show TD panel for the intercepting team
                         setShowTDPanel(scoringTeam)
                       }}
@@ -5088,10 +5129,7 @@ export default function LiveGamePage({ standalone = false }) {
                     setPendingTurnoverReview(null)
                     setShowTurnover(null)
                     // Track turnover
-                    setQuickStats(s => ({
-                      ...s,
-                      [possession]: {...s[possession], turnovers: s[possession].turnovers + 1}
-                    }))
+                    recordPlayResult('turnover')
                     // Show TD panel for the recovering team
                     setShowTDPanel(scoringTeam)
                   }}
@@ -5129,11 +5167,7 @@ export default function LiveGamePage({ standalone = false }) {
                     className="bg-red-600 hover:bg-red-700"
                     onClick={() => {
                       // Track fumble turnover in quick stats (offense loses ball)
-                      const offenseTeam = possession
-                      setQuickStats(s => ({
-                        ...s,
-                        [offenseTeam]: {...s[offenseTeam], turnovers: s[offenseTeam].turnovers + 1}
-                      }))
+                      recordPlayResult('turnover')
                       setPendingFumble(false)
                       togglePossession()
                       setShowFumbleRecovery('defense')
@@ -5898,7 +5932,11 @@ export default function LiveGamePage({ standalone = false }) {
                   <Button 
                     className="bg-rose-500 hover:bg-rose-600"
                     onClick={() => {
-                      // Muffed punt - punting team recovers
+                      // Muffed punt - punting team recovers, a lost fumble by the receiving team
+                      const receivingTeam = possession === 'home' ? 'away' : possession === 'away' ? 'home' : null
+                      if (receivingTeam) {
+                        setQuickStats(s => ({ ...s, [receivingTeam]: { ...s[receivingTeam], turnovers: (s[receivingTeam].turnovers || 0) + 1 } }))
+                      }
                       setGameStatus(null)
                       stopTimer()
                       // Possession stays with punting team
