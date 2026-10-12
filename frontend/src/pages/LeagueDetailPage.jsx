@@ -183,10 +183,13 @@ export default function LeagueDetailPage() {
       seasonApi.getStandings(selectedStandingsSeasonId).then((stats) => {
         const teamsById = new Map((league?.teams || []).map(t => [t.id, t]))
 
-        // Compute per-season home/away from final games in this season
+        // Compute per-season home/away from final games in this season.
+        // Preseason games (Preseason Week games, or any game in a preseason-phase season) aren't part of the main record.
+        const seasonPhase = seasons.find(s => s.id === selectedStandingsSeasonId)?.phase
+        const isPreseasonGame = (g) => g.game_unit_type === 3 || (g.game_unit_type !== 2 && seasonPhase === 'preseason')
         const haByTeam = {}
         const seasonFinals = (games || []).filter(
-          (g) => g.season_id === selectedStandingsSeasonId && g.status === 'final' && g.home_team_id && g.away_team_id
+          (g) => g.season_id === selectedStandingsSeasonId && g.status === 'final' && g.home_team_id && g.away_team_id && !isPreseasonGame(g)
         )
         for (const g of seasonFinals) {
           if (!haByTeam[g.home_team_id]) haByTeam[g.home_team_id] = { home_wins: 0, home_losses: 0, home_ties: 0, away_wins: 0, away_losses: 0, away_ties: 0 }
@@ -228,7 +231,7 @@ export default function LeagueDetailPage() {
     }).catch((e) => {
       console.error('Failed to load filtered standings:', e)
     })
-  }, [leagueId, selectedPhaseFilter, selectedStandingsSeasonId, league?.teams, games])
+  }, [leagueId, selectedPhaseFilter, selectedStandingsSeasonId, league?.teams, games, seasons])
 
   // WebSocket for real-time game updates
   useEffect(() => {

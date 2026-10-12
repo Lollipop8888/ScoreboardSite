@@ -685,20 +685,15 @@ def get_league_standings(
 
     # Phase-filtered standings: compute W/L/T and PF/PA from final games in that phase
     phase = phase.lower()
-    q = (
-        db.query(models.Game)
+    rows = (
+        db.query(models.Game, models.Season.phase)
         .outerjoin(models.Season, models.Game.season_id == models.Season.id)
         .filter(models.Game.league_id == league_id)
         .filter(models.Game.status == "final")
+        .all()
     )
-
-    if phase == "regular":
-        # Treat games with no season as regular by default
-        q = q.filter((models.Season.phase == "regular") | (models.Game.season_id == None))
-    else:
-        q = q.filter(models.Season.phase == phase)
-
-    games = q.all()
+    # Games with no season count as regular; a game's unit type (playoff/preseason week) wins over the season phase
+    games = [g for g, season_phase in rows if get_game_phase(g, season_phase) == phase]
 
     # Build computed map
     computed: dict[str, dict[str, int]] = {
@@ -868,6 +863,70 @@ async def delete_team_logo(
 
 
 # ============ Game Endpoints ============
+def get_game_phase(game, season_phase: Optional[str]) -> str:
+    """Which record a game counts toward. A game's unit type wins over the season's phase:
+    type 2 (e.g. "Playoff Week") is playoffs, type 3 (e.g. "Preseason Week") is preseason."""
+    if game.game_unit_type == 2:
+        return "playoffs"
+    if game.game_unit_type == 3:
+        return "preseason"
+    return season_phase if season_phase in ("preseason", "playoffs") else "regular"
+
+
+def apply_game_result(record, phase: str, scored: int, allowed: int, side: Optional[str] = None):
+    """Add one final game to a Team or TeamSeasonStats row.
+    Preseason games only count toward the preseason record, never the main W/L/T or points."""
+    result = "wins" if scored > allowed else "losses" if scored < allowed else "ties"
+    prefix = {"preseason": "preseason", "playoffs": "playoff"}.get(phase, "regular")
+
+    def bump(field, amount=1):
+        setattr(record, field, (getattr(record, field) or 0) + amount)
+
+    bump(f"{prefix}_{result}")
+    if phase == "preseason":
+        return
+    bump(result)
+    bump("points_for", scored or 0)
+    bump("points_against", allowed or 0)
+    if side:
+        bump(f"{side}_{result}")
+
+
+SEASON_STAT_FIELDS = [
+    "wins", "losses", "ties", "points_for", "points_against",
+    "preseason_wins", "preseason_losses", "preseason_ties",
+    "regular_wins", "regular_losses", "regular_ties",
+    "playoff_wins", "playoff_losses", "playoff_ties",
+]
+
+
+def recompute_season_stats(db: Session, season_id: Optional[str]):
+    """Rebuild a season's standings (TeamSeasonStats) from its final games.
+    Finished seasons are left untouched so their final standings stay as recorded."""
+    if not season_id:
+        return
+    season = db.query(models.Season).filter(models.Season.id == season_id).first()
+    if not season or season.is_finished:
+        return
+
+    stats = {s.team_id: s for s in db.query(models.TeamSeasonStats).filter(models.TeamSeasonStats.season_id == season_id)}
+    for team in db.query(models.Team).filter(models.Team.league_id == season.league_id):
+        if team.id not in stats:
+            stats[team.id] = models.TeamSeasonStats(team_id=team.id, season_id=season_id)
+            db.add(stats[team.id])
+    for s in stats.values():
+        for field in SEASON_STAT_FIELDS:
+            setattr(s, field, 0)
+
+    finals = db.query(models.Game).filter(models.Game.season_id == season_id, models.Game.status == "final").all()
+    for g in finals:
+        if g.home_team_id not in stats or g.away_team_id not in stats:
+            continue
+        phase = get_game_phase(g, season.phase)
+        apply_game_result(stats[g.home_team_id], phase, g.home_score or 0, g.away_score or 0)
+        apply_game_result(stats[g.away_team_id], phase, g.away_score or 0, g.home_score or 0)
+
+
 @app.post("/api/games", response_model=schemas.GameWithTeams)
 async def create_game(
     game: schemas.GameCreate, 
@@ -992,6 +1051,7 @@ async def update_game(
     check_league_ownership(db, db_game.league_id, current_user)
     
     old_status = db_game.status
+    old_season_id = db_game.season_id
     old_home_score = db_game.home_score
     old_away_score = db_game.away_score
     
@@ -1026,65 +1086,17 @@ async def update_game(
         home_team = db.query(models.Team).filter(models.Team.id == db_game.home_team_id).first()
         away_team = db.query(models.Team).filter(models.Team.id == db_game.away_team_id).first()
         
-        # Get season phase for phase-specific records
-        season_phase = None
-        if db_game.season_id:
-            season = db.query(models.Season).filter(models.Season.id == db_game.season_id).first()
-            if season:
-                season_phase = season.phase  # 'preseason', 'regular', 'playoffs'
+        season = db.query(models.Season).filter(models.Season.id == db_game.season_id).first() if db_game.season_id else None
+        game_phase = get_game_phase(db_game, season.phase if season else None)
         
         if home_team and away_team:
-            home_team.points_for += db_game.home_score
-            home_team.points_against += db_game.away_score
-            away_team.points_for += db_game.away_score
-            away_team.points_against += db_game.home_score
+            apply_game_result(home_team, game_phase, db_game.home_score, db_game.away_score, side="home")
+            apply_game_result(away_team, game_phase, db_game.away_score, db_game.home_score, side="away")
             if db_game.home_score > db_game.away_score:
-                home_team.wins += 1
-                home_team.home_wins += 1  # Home record
-                away_team.losses += 1
-                away_team.away_losses += 1  # Away record
-                # Phase-specific records
-                if season_phase == 'preseason':
-                    home_team.preseason_wins += 1
-                    away_team.preseason_losses += 1
-                elif season_phase == 'playoffs':
-                    home_team.playoff_wins += 1
-                    away_team.playoff_losses += 1
-                else:  # regular or default
-                    home_team.regular_wins += 1
-                    away_team.regular_losses += 1
                 winner = home_team.name
             elif db_game.away_score > db_game.home_score:
-                away_team.wins += 1
-                away_team.away_wins += 1  # Away record
-                home_team.losses += 1
-                home_team.home_losses += 1  # Home record
-                # Phase-specific records
-                if season_phase == 'preseason':
-                    away_team.preseason_wins += 1
-                    home_team.preseason_losses += 1
-                elif season_phase == 'playoffs':
-                    away_team.playoff_wins += 1
-                    home_team.playoff_losses += 1
-                else:  # regular or default
-                    away_team.regular_wins += 1
-                    home_team.regular_losses += 1
                 winner = away_team.name
             else:
-                home_team.ties += 1
-                home_team.home_ties += 1  # Home record
-                away_team.ties += 1
-                away_team.away_ties += 1  # Away record
-                # Phase-specific records
-                if season_phase == 'preseason':
-                    home_team.preseason_ties += 1
-                    away_team.preseason_ties += 1
-                elif season_phase == 'playoffs':
-                    home_team.playoff_ties += 1
-                    away_team.playoff_ties += 1
-                else:  # regular or default
-                    home_team.regular_ties += 1
-                    away_team.regular_ties += 1
                 winner = None
             
             # Send game end notification
@@ -1109,6 +1121,12 @@ async def update_game(
             )
     
     db.commit()
+    
+    # Keep season standings in sync whenever a final game is involved (new final, score fix, un-finalized, season moved)
+    if old_status == "final" or db_game.status == "final":
+        for season_id in {old_season_id, db_game.season_id}:
+            recompute_season_stats(db, season_id)
+        db.commit()
     
     # Broadcast update to WebSocket clients
     game = db.query(models.Game).options(
@@ -1183,8 +1201,13 @@ async def delete_game(
         raise HTTPException(status_code=404, detail="Game not found")
     # Check user owns the league this game belongs to
     check_league_ownership(db, db_game.league_id, current_user)
+    season_id = db_game.season_id
+    was_final = db_game.status == "final"
     db.delete(db_game)
     db.commit()
+    if was_final:
+        recompute_season_stats(db, season_id)
+        db.commit()
     return None
 
 
