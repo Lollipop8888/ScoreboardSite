@@ -5,7 +5,7 @@ Run this script to update the database schema.
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "scoreboard.db")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scoreboard.db"))
 
 def migrate():
     conn = sqlite3.connect(DB_PATH)

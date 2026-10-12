@@ -81,6 +81,11 @@ export const seasonApi = {
   getStandings: (id) => fetchApi(`/seasons/${id}/standings`),
 };
 
+// Team Season Stats API
+export const teamSeasonStatsApi = {
+  update: (id, data) => fetchApi(`/team-season-stats/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+};
+
 // Record Type API
 export const recordTypeApi = {
   getByLeague: (leagueId) => fetchApi(`/leagues/${leagueId}/record-types`),

@@ -6,8 +6,9 @@ Usage: python migrate_add_colors.py
 """
 
 import sqlite3
+import os
 
-DATABASE_PATH = "./scoreboard.db"
+DATABASE_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scoreboard.db"))
 
 def migrate():
     conn = sqlite3.connect(DATABASE_PATH)

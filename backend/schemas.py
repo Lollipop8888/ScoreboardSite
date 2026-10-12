@@ -166,6 +166,23 @@ class TeamSeasonStats(TeamSeasonStatsBase):
         from_attributes = True
 
 
+class TeamSeasonStatsUpdate(BaseModel):
+    wins: Optional[int] = None
+    losses: Optional[int] = None
+    ties: Optional[int] = None
+    points_for: Optional[int] = None
+    points_against: Optional[int] = None
+    preseason_wins: Optional[int] = None
+    preseason_losses: Optional[int] = None
+    preseason_ties: Optional[int] = None
+    regular_wins: Optional[int] = None
+    regular_losses: Optional[int] = None
+    regular_ties: Optional[int] = None
+    playoff_wins: Optional[int] = None
+    playoff_losses: Optional[int] = None
+    playoff_ties: Optional[int] = None
+
+
 # RecordType Schemas
 class RecordTypeBase(BaseModel):
     name: str  # e.g., "Overall", "Conference", "Division"
@@ -272,7 +289,6 @@ class TeamUpdate(BaseModel):
     playoff_wins: Optional[int] = None
     playoff_losses: Optional[int] = None
     playoff_ties: Optional[int] = None
-    trophies: Optional[dict] = None
 
 
 class Team(TeamBase):
@@ -298,7 +314,6 @@ class Team(TeamBase):
     playoff_wins: int = 0
     playoff_losses: int = 0
     playoff_ties: int = 0
-    trophies: Optional[str] = None  # JSON string
     created_at: datetime
 
     class Config:

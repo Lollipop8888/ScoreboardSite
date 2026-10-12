@@ -1,0 +1,20 @@
+name: gridironscore
+
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # Persistent state: scoreboard.db and uploads/ (team/bracket logos)
+      - ./data:/data
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${GRIDIRON_PORT:-8470}:80"

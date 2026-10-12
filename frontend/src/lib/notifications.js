@@ -1,7 +1,7 @@
 import { notificationApi } from './api';
 
-// VAPID public key for web push notifications
-const VAPID_PUBLIC_KEY = 'BPtCdN40D9IxK28AwOX34BB3FxWYWV6KF6ROycq3gu7gdcvuY_HUWw9OO2kuVkrgnlCM00tUR5qQyiCInEgrdlI';
+// VAPID public key for web push notifications (must match backend/notifications.py)
+const VAPID_PUBLIC_KEY = 'BPmdvQmzKsfRYLqzL-CKmVC1TimdNoTro7zVTVZWJjx9SctszKqByW9_I2przLSI2QchrNsX2Kb4cj0GWO7cZEU';
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -18,6 +18,14 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
+function uint8ArraysEqual(a, b) {
+  if (!a || !b || a.byteLength !== b.byteLength) return false;
+  const av = new Uint8Array(a);
+  const bv = new Uint8Array(b);
+  for (let i = 0; i < av.length; i++) if (av[i] !== bv[i]) return false;
+  return true;
+}
+
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) {
     console.log('Service workers not supported');
@@ -32,6 +40,34 @@ export async function registerServiceWorker() {
     console.error('Service Worker registration failed:', error);
     return null;
   }
+}
+
+// Detect iOS (iPhone/iPad). iOS requires the site to be installed to Home Screen
+// (standalone mode) to allow web push (iOS 16.4+).
+export function isIOS() {
+  const ua = navigator.userAgent || '';
+  const isIPadOS = ua.includes('Macintosh') && 'ontouchend' in document;
+  return /iPhone|iPad|iPod/.test(ua) || isIPadOS;
+}
+
+export function isStandalone() {
+  return (
+    (typeof navigator !== 'undefined' && navigator.standalone === true) ||
+    (typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(display-mode: standalone)').matches)
+  );
+}
+
+// Returns null if supported, or a string explaining why push isn't available.
+export function getPushUnsupportedReason() {
+  if (!('serviceWorker' in navigator)) return 'Service workers are not supported in this browser.';
+  if (!('PushManager' in window)) return 'Push notifications are not supported in this browser.';
+  if (!('Notification' in window)) return 'Notifications are not supported in this browser.';
+  if (isIOS() && !isStandalone()) {
+    return 'On iOS, you must add this site to your Home Screen first (Share \u2192 Add to Home Screen), then open it from the icon. Requires iOS 16.4 or newer.';
+  }
+  return null;
 }
 
 export async function requestNotificationPermission() {
@@ -56,15 +92,27 @@ export async function requestNotificationPermission() {
 export async function subscribeToPush() {
   try {
     const registration = await navigator.serviceWorker.ready;
-    
-    // Check if already subscribed
+
+    const targetKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+
+    // Check if already subscribed with the CURRENT applicationServerKey.
     let subscription = await registration.pushManager.getSubscription();
-    
+    if (subscription) {
+      const existingKey = subscription.options && subscription.options.applicationServerKey;
+      if (!uint8ArraysEqual(existingKey, targetKey)) {
+        // Stale subscription from a previous VAPID key - drop it.
+        try {
+          await notificationApi.unsubscribe(subscription.endpoint);
+        } catch (_) { /* ignore */ }
+        await subscription.unsubscribe();
+        subscription = null;
+      }
+    }
+
     if (!subscription) {
-      // Subscribe to push
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+        applicationServerKey: targetKey,
       });
     }
 

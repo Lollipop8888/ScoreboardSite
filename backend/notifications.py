@@ -4,23 +4,39 @@ Push notification utilities for sending web push notifications
 import json
 import os
 from pywebpush import webpush, WebPushException
+from py_vapid import Vapid
 from sqlalchemy.orm import Session
 import models
 
-# VAPID keys - in production, these should be environment variables
-VAPID_PRIVATE_KEY = os.getenv('VAPID_PRIVATE_KEY', '''-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgjdnaDzBPr5+RH2mX
-yMF70BLGiJsOQDJXHyZLvi+3gTGhRANCAAT7QnTeNA/SMStvAMDl9+AQdxcVmFle
-ihekTsnKt4Lu4HXL7mPx1FsPTjtpLlZK4J5QjNNLVEeakMogiJxIK3ZS
------END PRIVATE KEY-----''')
-VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', 'BPtCdN40D9IxK28AwOX34BB3FxWYWV6KF6ROycq3gu7gdcvuY_HUWw9OO2kuVkrgnlCM00tUR5qQyiCInEgrdlI')
+# VAPID keys. The private key is a secret: it is read from VAPID_PRIVATE_KEY_FILE
+# (the Docker image points this at /data/vapid_private.pem) or VAPID_PRIVATE_KEY (PEM).
+# The public key must match frontend/src/lib/notifications.js.
+VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', 'BPmdvQmzKsfRYLqzL-CKmVC1TimdNoTro7zVTVZWJjx9SctszKqByW9_I2przLSI2QchrNsX2Kb4cj0GWO7cZEU')
 VAPID_CLAIMS = {
     "sub": "mailto:admin@scoreboard.local"
 }
 
 
+def _load_vapid_private_key_pem():
+    key_file = os.getenv('VAPID_PRIVATE_KEY_FILE')
+    if key_file and os.path.exists(key_file):
+        with open(key_file) as f:
+            return f.read()
+    return os.getenv('VAPID_PRIVATE_KEY')
+
+
+# Parse PEM once at import time. pywebpush's from_string expects raw DER base64,
+# not PEM, so we build a Vapid instance manually and pass it in.
+_VAPID_PRIVATE_KEY_PEM = _load_vapid_private_key_pem()
+_VAPID_INSTANCE = Vapid.from_pem(_VAPID_PRIVATE_KEY_PEM.encode()) if _VAPID_PRIVATE_KEY_PEM else None
+if _VAPID_INSTANCE is None:
+    print("[Push] No VAPID private key configured - push notifications are disabled")
+
+
 def send_push_notification(subscription_info: dict, title: str, body: str, data: dict = None):
     """Send a push notification to a single subscription"""
+    if _VAPID_INSTANCE is None:
+        return False
     try:
         payload = json.dumps({
             "title": title,
@@ -29,12 +45,12 @@ def send_push_notification(subscription_info: dict, title: str, body: str, data:
             "badge": "/logo.png",
             "data": data or {}
         })
-        
+
         webpush(
             subscription_info=subscription_info,
             data=payload,
-            vapid_private_key=VAPID_PRIVATE_KEY,
-            vapid_claims=VAPID_CLAIMS
+            vapid_private_key=_VAPID_INSTANCE,
+            vapid_claims=dict(VAPID_CLAIMS),
         )
         return True
     except WebPushException as e:
@@ -42,6 +58,10 @@ def send_push_notification(subscription_info: dict, title: str, body: str, data:
         # If subscription is invalid, return False so caller can clean up
         if e.response and e.response.status_code in [404, 410]:
             return False
+        return None
+    except Exception as e:
+        # Never let notification failures 500 the caller.
+        print(f"Push notification error: {type(e).__name__}: {e}")
         return None
 
 

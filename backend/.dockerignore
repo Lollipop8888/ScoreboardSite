@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+uploads/
+scripts/
+*.db
+*.db.*
+scoreboard*
+scorekeeper*

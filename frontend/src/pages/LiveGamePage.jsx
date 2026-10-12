@@ -4973,6 +4973,17 @@ export default function LiveGamePage({ standalone = false }) {
                   >
                     🔍 Review
                   </Button>
+                  <Button 
+                    className="bg-yellow-500 hover:bg-yellow-600 text-black"
+                    onClick={() => {
+                      setPendingTurnoverReview(null)
+                      setShowTurnover(null)
+                      setShowFlagPanel(true)
+                      showFlagStage1()
+                    }}
+                  >
+                    🚩 Flag
+                  </Button>
                 </div>
                 {/* Touchback and Pick 6 options for interceptions */}
                 {pendingTurnoverReview === 'interception' && (
@@ -5055,6 +5066,17 @@ export default function LiveGamePage({ standalone = false }) {
                     }}
                   >
                     🔍 Review
+                  </Button>
+                  <Button 
+                    className="bg-yellow-500 hover:bg-yellow-600 text-black"
+                    onClick={() => {
+                      setPendingTurnoverReview(null)
+                      setShowTurnover(null)
+                      setShowFlagPanel(true)
+                      showFlagStage1()
+                    }}
+                  >
+                    🚩 Flag
                   </Button>
                 </div>
                 {/* Scoop & Score option */}
@@ -7382,22 +7404,37 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* Review Result Buttons */}
             {reviewDisplayStage > 0 && !reviewResult && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    size="lg"
+                    className="gap-2 bg-green-600 hover:bg-green-700 text-white font-bold"
+                    onClick={setReviewUpheld}
+                  >
+                    <span>✅</span>
+                    Call Stands
+                  </Button>
+                  <Button
+                    size="lg"
+                    className="gap-2 bg-orange-600 hover:bg-orange-700 text-white font-bold"
+                    onClick={setReviewReversed}
+                  >
+                    <span>🔄</span>
+                    Call Reversed
+                  </Button>
+                </div>
+                {/* Flag/Penalty Option */}
                 <Button
                   size="lg"
-                  className="gap-2 bg-green-600 hover:bg-green-700 text-white font-bold"
-                  onClick={setReviewUpheld}
+                  className="w-full gap-2 bg-yellow-500 hover:bg-yellow-600 text-black font-bold"
+                  onClick={() => {
+                    hideReview()
+                    setShowFlagPanel(true)
+                    showFlagStage1()
+                  }}
                 >
-                  <span>✅</span>
-                  Call Stands
-                </Button>
-                <Button
-                  size="lg"
-                  className="gap-2 bg-orange-600 hover:bg-orange-700 text-white font-bold"
-                  onClick={setReviewReversed}
-                >
-                  <span>🔄</span>
-                  Call Reversed
+                  <Flag className="h-5 w-5" />
+                  🚩 Flag on Play
                 </Button>
               </div>
             )}

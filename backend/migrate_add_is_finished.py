@@ -7,7 +7,7 @@ import sqlite3
 import os
 
 # Get the database path
-db_path = os.path.join(os.path.dirname(__file__), 'scoreboard.db')
+db_path = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scoreboard.db"))
 
 def migrate():
     conn = sqlite3.connect(db_path)

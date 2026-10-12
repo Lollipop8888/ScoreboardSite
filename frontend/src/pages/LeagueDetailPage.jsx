@@ -23,8 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, inviteApi, followApi, notificationApi, createWebSocket } from '@/lib/api'
-import { requestNotificationPermission, subscribeToPush } from '@/lib/notifications'
+import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, teamSeasonStatsApi, inviteApi, followApi, notificationApi, createWebSocket } from '@/lib/api'
+import { requestNotificationPermission, subscribeToPush, getPushUnsupportedReason } from '@/lib/notifications'
 import { Bell, BellOff } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { QRCodeSVG } from 'qrcode.react'
@@ -103,13 +103,22 @@ export default function LeagueDetailPage() {
   const [gameUnitLabel, setGameUnitLabel] = useState('')
   const [seasons, setSeasons] = useState([])
   const [currentSeason, setCurrentSeason] = useState(null)
+  const [selectedStandingsSeasonId, setSelectedStandingsSeasonId] = useState('all')
   const [newSeasonDialogOpen, setNewSeasonDialogOpen] = useState(false)
   const [newSeasonName, setNewSeasonName] = useState('')
   const [recordTypes, setRecordTypes] = useState([])
   const [selectedRecordType, setSelectedRecordType] = useState(null) // null = main/Overall
   const [selectedPhaseFilter, setSelectedPhaseFilter] = useState('overall') // 'overall', 'preseason', 'regular', 'playoffs'
+
+  // The phase selector is only shown for all-time standings, so don't keep a hidden phase filter applied to a single season
+  useEffect(() => {
+    if (selectedStandingsSeasonId !== 'all') setSelectedPhaseFilter('overall')
+  }, [selectedStandingsSeasonId])
+
   const [newRecordTypeName, setNewRecordTypeName] = useState('')
+  const [standingsSubTab, setStandingsSubTab] = useState('table')
   const [settingsTab, setSettingsTab] = useState('general')
+  const [activeTab, setActiveTab] = useState('standings')
   const [penaltiesDialogOpen, setPenaltiesDialogOpen] = useState(false)
   const [addPenaltyDialogOpen, setAddPenaltyDialogOpen] = useState(false)
   const [addSubPenaltyDialogOpen, setAddSubPenaltyDialogOpen] = useState(false)
@@ -151,6 +160,76 @@ export default function LeagueDetailPage() {
     loadData()
   }, [leagueId])
 
+  // Check follow status whenever user or league changes (auth may load after initial mount)
+  useEffect(() => {
+    if (!user || !leagueId) {
+      setIsFollowing(false)
+      return
+    }
+    let cancelled = false
+    followApi.getAll()
+      .then((follows) => {
+        if (cancelled) return
+        setIsFollowing((follows || []).some(f => f.league_id === leagueId))
+      })
+      .catch((err) => console.error('Failed to check follow status:', err))
+    return () => { cancelled = true }
+  }, [user, leagueId])
+
+  useEffect(() => {
+    if (!leagueId) return
+    // If a specific season is selected, standings come from TeamSeasonStats (season-specific)
+    if (selectedStandingsSeasonId && selectedStandingsSeasonId !== 'all') {
+      seasonApi.getStandings(selectedStandingsSeasonId).then((stats) => {
+        const teamsById = new Map((league?.teams || []).map(t => [t.id, t]))
+
+        // Compute per-season home/away from final games in this season
+        const haByTeam = {}
+        const seasonFinals = (games || []).filter(
+          (g) => g.season_id === selectedStandingsSeasonId && g.status === 'final' && g.home_team_id && g.away_team_id
+        )
+        for (const g of seasonFinals) {
+          if (!haByTeam[g.home_team_id]) haByTeam[g.home_team_id] = { home_wins: 0, home_losses: 0, home_ties: 0, away_wins: 0, away_losses: 0, away_ties: 0 }
+          if (!haByTeam[g.away_team_id]) haByTeam[g.away_team_id] = { home_wins: 0, home_losses: 0, home_ties: 0, away_wins: 0, away_losses: 0, away_ties: 0 }
+          const hs = g.home_score || 0
+          const as_ = g.away_score || 0
+          if (hs > as_) {
+            haByTeam[g.home_team_id].home_wins += 1
+            haByTeam[g.away_team_id].away_losses += 1
+          } else if (as_ > hs) {
+            haByTeam[g.away_team_id].away_wins += 1
+            haByTeam[g.home_team_id].home_losses += 1
+          } else {
+            haByTeam[g.home_team_id].home_ties += 1
+            haByTeam[g.away_team_id].away_ties += 1
+          }
+        }
+
+        const merged = (stats || []).map((s) => {
+          const team = teamsById.get(s.team_id) || {}
+          const ha = haByTeam[s.team_id] || { home_wins: 0, home_losses: 0, home_ties: 0, away_wins: 0, away_losses: 0, away_ties: 0 }
+          return {
+            ...team,
+            ...s,
+            ...ha,
+            id: team.id || s.team_id,
+            __seasonStatsId: s.id,
+          }
+        })
+        setStandings(merged)
+      }).catch((e) => {
+        console.error('Failed to load season standings:', e)
+      })
+      return
+    }
+
+    leagueApi.getStandings(leagueId, selectedPhaseFilter).then((data) => {
+      setStandings(data || [])
+    }).catch((e) => {
+      console.error('Failed to load filtered standings:', e)
+    })
+  }, [leagueId, selectedPhaseFilter, selectedStandingsSeasonId, league?.teams, games])
+
   // WebSocket for real-time game updates
   useEffect(() => {
     if (!league?.share_code) return
@@ -181,7 +260,7 @@ export default function LeagueDetailPage() {
       // Then get the rest - these can fail without breaking the page
       try {
         const [standingsData, gamesData, bracketsData, seasonsData, currentSeasonData, recordTypesData] = await Promise.all([
-          leagueApi.getStandings(leagueId),
+          leagueApi.getStandings(leagueId, selectedPhaseFilter),
           leagueApi.getGames(leagueId),
           leagueApi.getBrackets(leagueId),
           leagueApi.getSeasons(leagueId),
@@ -194,6 +273,9 @@ export default function LeagueDetailPage() {
         setSeasons(seasonsData || [])
         setCurrentSeason(currentSeasonData)
         setRecordTypes(recordTypesData || [])
+
+        // Keep default as 'all' so phase filters work immediately.
+        // User can switch to a specific season manually.
       } catch (err) {
         console.error('Failed to load additional data:', err)
         setStandings([])
@@ -282,7 +364,14 @@ export default function LeagueDetailPage() {
     e.preventDefault()
     if (!editingStatsTeam) return
     try {
-      await teamApi.update(editingStatsTeam.id, statsForm)
+      if (selectedStandingsSeasonId && selectedStandingsSeasonId !== 'all') {
+        if (!editingStatsTeam.__seasonStatsId) {
+          throw new Error('Missing season stats id for this team')
+        }
+        await teamSeasonStatsApi.update(editingStatsTeam.__seasonStatsId, statsForm)
+      } else {
+        await teamApi.update(editingStatsTeam.id, statsForm)
+      }
       setStatsEditDialogOpen(false)
       setEditingStatsTeam(null)
       setStatsForm({ wins: 0, losses: 0, ties: 0, points_for: 0, points_against: 0 })
@@ -645,13 +734,25 @@ export default function LeagueDetailPage() {
                     await followApi.unfollowLeague(leagueId)
                     setIsFollowing(false)
                   } else {
-                    // Request notification permission and subscribe to push
-                    const hasPermission = await requestNotificationPermission()
-                    if (hasPermission) {
-                      await subscribeToPush()
-                    }
+                    // Follow first so the user gets the in-app relationship even
+                    // if push can't be enabled (e.g. iOS Safari not installed as PWA).
                     await followApi.followLeague(leagueId)
                     setIsFollowing(true)
+
+                    const unsupported = getPushUnsupportedReason()
+                    if (unsupported) {
+                      alert('Followed! ' + unsupported)
+                    } else {
+                      const hasPermission = await requestNotificationPermission()
+                      if (hasPermission) {
+                        const sub = await subscribeToPush()
+                        if (!sub) {
+                          alert('Followed! But we could not enable push notifications on this device.')
+                        }
+                      } else if (Notification.permission === 'denied') {
+                        alert('Followed! Notifications are blocked for this site. Enable them in your browser settings to receive alerts.')
+                      }
+                    }
                   }
                 } catch (err) {
                   console.error('Failed to toggle follow:', err)
@@ -677,7 +778,7 @@ export default function LeagueDetailPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="standings" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList data-tutorial="league-tabs">
           <TabsTrigger value="standings" className="gap-2">
             <Trophy className="h-4 w-4" />
@@ -706,327 +807,169 @@ export default function LeagueDetailPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>League Standings</CardTitle>
-                <CardDescription>Current rankings based on wins and losses</CardDescription>
+                <CardTitle>Standings</CardTitle>
+                <CardDescription>View standings</CardDescription>
               </div>
-              {/* Phase Filter */}
-              <Select value={selectedPhaseFilter} onValueChange={setSelectedPhaseFilter}>
-                <SelectTrigger className="w-[160px]">
-                  <SelectValue placeholder="Phase" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="overall">Overall</SelectItem>
-                  <SelectItem value="preseason">Preseason</SelectItem>
-                  <SelectItem value="regular">Regular Season</SelectItem>
-                  <SelectItem value="playoffs">Playoffs</SelectItem>
-                </SelectContent>
-              </Select>
             </CardHeader>
             <CardContent>
-              {standings.length === 0 ? (
-                <div className="text-center py-12">
-                  <Trophy className="mx-auto h-12 w-12 text-slate-300 mb-4" />
-                  <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300">No standings yet</h3>
-                  <p className="text-slate-500 mt-1">Add teams to this league to see standings.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b text-left text-sm font-medium text-slate-500">
-                        <th className="pb-3 pr-4">Rank</th>
-                        <th className="pb-3 pr-4">Team</th>
-                        <th className="pb-3 pr-4 text-center">W</th>
-                        <th className="pb-3 pr-4 text-center">L</th>
-                        <th className="pb-3 pr-4 text-center">T</th>
-                        <th className="pb-3 pr-4 text-center">PCT</th>
-                        <th className="pb-3 pr-4 text-center">Home</th>
-                        <th className="pb-3 pr-4 text-center">Away</th>
-                        {league?.has_groups && <th className="pb-3 pr-4 text-center">{league.group_label_2 || 'Div'} Rank</th>}
-                        <th className="pb-3 pr-4 text-center">PF</th>
-                        <th className="pb-3 pr-4 text-center">PA</th>
-                        <th className="pb-3 pr-4 text-center">Diff</th>
-                        <th className="pb-3 text-center">Edit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(() => {
-                        // Get record stats for each team based on selected phase and record type
-                        const getTeamRecord = (team) => {
-                          // First apply phase filter
-                          let wins, losses, ties
-                          if (selectedPhaseFilter === 'preseason') {
-                            wins = team.preseason_wins || 0
-                            losses = team.preseason_losses || 0
-                            ties = team.preseason_ties || 0
-                          } else if (selectedPhaseFilter === 'regular') {
-                            wins = team.regular_wins || 0
-                            losses = team.regular_losses || 0
-                            ties = team.regular_ties || 0
-                          } else if (selectedPhaseFilter === 'playoffs') {
-                            wins = team.playoff_wins || 0
-                            losses = team.playoff_losses || 0
-                            ties = team.playoff_ties || 0
-                          } else {
-                            // Overall - use main stats or record type
-                            if (!selectedRecordType) {
-                              return { wins: team.wins || 0, losses: team.losses || 0, ties: team.ties || 0, points_for: team.points_for || 0, points_against: team.points_against || 0 }
-                            }
-                            // Find the specific record type
-                            const record = team.records?.find(r => r.record_type_id === selectedRecordType)
-                            if (record) {
-                              return { wins: record.wins || 0, losses: record.losses || 0, ties: record.ties || 0, points_for: record.points_for || 0, points_against: record.points_against || 0 }
-                            }
-                            return { wins: 0, losses: 0, ties: 0, points_for: 0, points_against: 0 }
-                          }
-                          // Phase-specific records don't have points_for/against tracked separately
-                          return { wins, losses, ties, points_for: team.points_for || 0, points_against: team.points_against || 0 }
-                        }
-                        
-                        // Sort standings based on selected record type
-                        const sortedStandings = [...standings].sort((a, b) => {
-                          const aRec = getTeamRecord(a)
-                          const bRec = getTeamRecord(b)
-                          // Sort by wins desc, losses asc, point diff desc
-                          if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins
-                          if (aRec.losses !== bRec.losses) return aRec.losses - bRec.losses
-                          return (bRec.points_for - bRec.points_against) - (aRec.points_for - aRec.points_against)
-                        })
-                        
-                        return sortedStandings.map((team, index) => {
-                          const rec = getTeamRecord(team)
-                          return (
-                            <tr key={team.id} className="border-b last:border-0">
-                              <td className="py-3 pr-4 font-medium">{index + 1}</td>
-                              <td className="py-3 pr-4">
-                                <div className="flex items-center gap-2">
-                                  {team.logo_url ? (
-                                    <img src={team.logo_url} alt="" className="h-5 w-5 object-contain" />
-                                  ) : (
-                                    <div
-                                      className="h-4 w-4 rounded-full"
-                                      style={{ backgroundColor: team.color }}
-                                    />
-                                  )}
-                                  <span className="font-medium">{team.name}</span>
-                                  {team.abbreviation && (
-                                    <span className="text-slate-400">({team.abbreviation})</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-3 pr-4 text-center font-semibold text-green-600">{rec.wins}</td>
-                              <td className="py-3 pr-4 text-center font-semibold text-red-600">{rec.losses}</td>
-                              <td className="py-3 pr-4 text-center text-slate-500">{rec.ties}</td>
-                              <td className="py-3 pr-4 text-center font-semibold text-blue-600">
-                                {(() => {
-                                  const totalGames = rec.wins + rec.losses + rec.ties
-                                  if (totalGames === 0) return '—'
-                                  const winPct = (rec.wins + rec.ties * 0.5) / totalGames
-                                  return (winPct * 100).toFixed(0) + '%'
-                                })()}
-                              </td>
-                              {/* Home Record */}
-                              <td className="py-3 pr-4 text-center text-sm">
-                                <span className="text-green-600">{team.home_wins || 0}</span>
-                                <span className="text-slate-400">-</span>
-                                <span className="text-red-600">{team.home_losses || 0}</span>
-                                {(team.home_ties || 0) > 0 && <><span className="text-slate-400">-</span><span className="text-slate-500">{team.home_ties}</span></>}
-                              </td>
-                              {/* Away Record */}
-                              <td className="py-3 pr-4 text-center text-sm">
-                                <span className="text-green-600">{team.away_wins || 0}</span>
-                                <span className="text-slate-400">-</span>
-                                <span className="text-red-600">{team.away_losses || 0}</span>
-                                {(team.away_ties || 0) > 0 && <><span className="text-slate-400">-</span><span className="text-slate-500">{team.away_ties}</span></>}
-                              </td>
-                              {/* Division Rank */}
-                              {league?.has_groups && (
-                                <td className="py-3 pr-4 text-center">
-                                  {team.group_1 && team.group_2 ? (
-                                    <span className="text-purple-600 font-medium">
-                                      {(() => {
-                                        const divTeams = sortedStandings.filter(t => t.group_1 === team.group_1 && t.group_2 === team.group_2)
-                                        const sorted = [...divTeams].sort((a, b) => {
-                                          const aRec = getTeamRecord(a)
-                                          const bRec = getTeamRecord(b)
-                                          const aTotal = aRec.wins + aRec.losses + aRec.ties
-                                          const bTotal = bRec.wins + bRec.losses + bRec.ties
-                                          const aWinPct = aTotal > 0 ? (aRec.wins + aRec.ties * 0.5) / aTotal : 0
-                                          const bWinPct = bTotal > 0 ? (bRec.wins + bRec.ties * 0.5) / bTotal : 0
-                                          if (bWinPct !== aWinPct) return bWinPct - aWinPct
-                                          return bRec.wins - aRec.wins
-                                        })
-                                        const rank = sorted.findIndex(t => t.id === team.id) + 1
-                                        return `#${rank} ${team.group_1} ${team.group_2}`
-                                      })()}
-                                    </span>
-                                  ) : '—'}
-                                </td>
-                              )}
-                              <td className="py-3 pr-4 text-center">{rec.points_for}</td>
-                              <td className="py-3 pr-4 text-center">{rec.points_against}</td>
-                              <td className="py-3 pr-4 text-center">
-                                <span className={rec.points_for - rec.points_against >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                  {rec.points_for - rec.points_against >= 0 ? '+' : ''}{rec.points_for - rec.points_against}
-                                </span>
-                              </td>
-                              <td className="py-3 text-center">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => openStatsEditDialog(team)}
-                                  className="h-8 w-8 text-slate-400 hover:text-blue-600"
-                                  disabled={league.is_finished}
-                                >
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                              </td>
-                            </tr>
-                          )
-                        })
-                      })()}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+              {standingsSubTab === 'table' && (
+                <>
+                  <div className="flex items-center justify-end gap-2 pb-4">
+                    <Select value={selectedStandingsSeasonId} onValueChange={setSelectedStandingsSeasonId}>
+                      <SelectTrigger className="w-[200px]">
+                        <SelectValue placeholder="Season" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All-time</SelectItem>
+                        {(seasons || []).map((s) => (
+                          <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
-          {/* Trophies & Awards Section */}
-          <Card className="mt-6">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Trophy className="h-5 w-5 text-yellow-500" />
-                Trophies & Awards
-              </CardTitle>
-              <CardDescription>Track championships, division titles, and other achievements</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {standings.length === 0 ? (
-                <p className="text-slate-500 text-center py-4">Add teams to track trophies</p>
-              ) : (
-                <div className="space-y-4">
-                  {standings.map(team => {
-                    const trophies = team.trophies ? (typeof team.trophies === 'string' ? JSON.parse(team.trophies) : team.trophies) : {}
-                    const hasTrophies = Object.keys(trophies).length > 0 && Object.values(trophies).some(v => v > 0)
-                    return (
-                      <div key={team.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                        <div className="flex items-center gap-3">
-                          {team.logo_url ? (
-                            <img src={team.logo_url} alt="" className="h-8 w-8 object-contain" />
-                          ) : (
-                            <div className="h-8 w-8 rounded-full" style={{ backgroundColor: team.color }} />
-                          )}
-                          <span className="font-medium">{team.name}</span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          {hasTrophies ? (
-                            <div className="flex items-center gap-3 text-sm">
-                              {trophies.championships > 0 && (
-                                <span className="flex items-center gap-1 text-yellow-600">
-                                  <Trophy className="h-4 w-4" /> {trophies.championships}
-                                </span>
-                              )}
-                              {trophies.division_titles > 0 && (
-                                <span className="flex items-center gap-1 text-blue-600">
-                                  🏅 {trophies.division_titles}
-                                </span>
-                              )}
-                              {trophies.conference_titles > 0 && (
-                                <span className="flex items-center gap-1 text-purple-600">
-                                  🎖️ {trophies.conference_titles}
-                                </span>
-                              )}
-                              {trophies.mvps > 0 && (
-                                <span className="flex items-center gap-1 text-green-600">
-                                  ⭐ {trophies.mvps}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-slate-400 text-sm">No trophies yet</span>
-                          )}
-                          <Dialog>
-                            <DialogTrigger asChild>
-                              <Button variant="outline" size="sm" disabled={league.is_finished}>
-                                Edit
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent>
-                              <DialogHeader>
-                                <DialogTitle>Edit Trophies - {team.name}</DialogTitle>
-                                <DialogDescription>Update trophy counts for this team</DialogDescription>
-                              </DialogHeader>
-                              <div className="grid gap-4 py-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                    <Label>🏆 Championships</Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      defaultValue={trophies.championships || 0}
-                                      id={`trophy-champ-${team.id}`}
-                                    />
-                                  </div>
-                                  <div>
-                                    <Label>🏅 Division Titles</Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      defaultValue={trophies.division_titles || 0}
-                                      id={`trophy-div-${team.id}`}
-                                    />
-                                  </div>
-                                  <div>
-                                    <Label>🎖️ Conference Titles</Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      defaultValue={trophies.conference_titles || 0}
-                                      id={`trophy-conf-${team.id}`}
-                                    />
-                                  </div>
-                                  <div>
-                                    <Label>⭐ MVPs</Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      defaultValue={trophies.mvps || 0}
-                                      id={`trophy-mvp-${team.id}`}
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                              <DialogFooter>
-                                <DialogClose asChild>
-                                  <Button
-                                    onClick={async () => {
-                                      const newTrophies = {
-                                        championships: parseInt(document.getElementById(`trophy-champ-${team.id}`).value) || 0,
-                                        division_titles: parseInt(document.getElementById(`trophy-div-${team.id}`).value) || 0,
-                                        conference_titles: parseInt(document.getElementById(`trophy-conf-${team.id}`).value) || 0,
-                                        mvps: parseInt(document.getElementById(`trophy-mvp-${team.id}`).value) || 0
-                                      }
-                                      try {
-                                        await teamApi.update(team.id, { trophies: newTrophies })
-                                        loadData()
-                                      } catch (error) {
-                                        console.error('Failed to update trophies:', error)
-                                      }
-                                    }}
-                                  >
-                                    Save Trophies
-                                  </Button>
-                                </DialogClose>
-                              </DialogFooter>
-                            </DialogContent>
-                          </Dialog>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                    {selectedStandingsSeasonId === 'all' && (
+                      <Select value={selectedPhaseFilter} onValueChange={setSelectedPhaseFilter}>
+                        <SelectTrigger className="w-[160px]">
+                          <SelectValue placeholder="Phase" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="overall">Overall</SelectItem>
+                          <SelectItem value="preseason">Preseason</SelectItem>
+                          <SelectItem value="regular">Regular Season</SelectItem>
+                          <SelectItem value="playoffs">Playoffs</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                  {standings.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Trophy className="mx-auto h-12 w-12 text-slate-300 mb-4" />
+                      <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300">No standings yet</h3>
+                      <p className="text-slate-500 mt-1">Add teams to this league to see standings.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b text-left text-sm font-medium text-slate-500">
+                            <th className="pb-3 pr-4">Rank</th>
+                            <th className="pb-3 pr-4">Team</th>
+                            <th className="pb-3 pr-4 text-center">W</th>
+                            <th className="pb-3 pr-4 text-center">L</th>
+                            <th className="pb-3 pr-4 text-center">T</th>
+                            <th className="pb-3 pr-4 text-center">PCT</th>
+                            <th className="pb-3 pr-4 text-center">Home</th>
+                            <th className="pb-3 pr-4 text-center">Away</th>
+                            {league?.has_groups && <th className="pb-3 pr-4 text-center">{league.group_label_2 || 'Div'} Rank</th>}
+                            <th className="pb-3 pr-4 text-center">PF</th>
+                            <th className="pb-3 pr-4 text-center">PA</th>
+                            <th className="pb-3 pr-4 text-center">Diff</th>
+                            <th className="pb-3 text-center">Edit</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const getTeamRecord = (team) => {
+                              let wins, losses, ties
+                              if (selectedPhaseFilter === 'preseason') {
+                                wins = team.preseason_wins || 0
+                                losses = team.preseason_losses || 0
+                                ties = team.preseason_ties || 0
+                              } else if (selectedPhaseFilter === 'regular') {
+                                wins = team.regular_wins || 0
+                                losses = team.regular_losses || 0
+                                ties = team.regular_ties || 0
+                              } else if (selectedPhaseFilter === 'playoffs') {
+                                wins = team.playoff_wins || 0
+                                losses = team.playoff_losses || 0
+                                ties = team.playoff_ties || 0
+                              } else {
+                                if (!selectedRecordType) {
+                                  return { wins: team.wins || 0, losses: team.losses || 0, ties: team.ties || 0, points_for: team.points_for || 0, points_against: team.points_against || 0 }
+                                }
+                                const record = team.records?.find(r => r.record_type_id === selectedRecordType)
+                                if (record) {
+                                  return { wins: record.wins || 0, losses: record.losses || 0, ties: record.ties || 0, points_for: record.points_for || 0, points_against: record.points_against || 0 }
+                                }
+                                return { wins: 0, losses: 0, ties: 0, points_for: 0, points_against: 0 }
+                              }
+                              return { wins, losses, ties, points_for: team.points_for || 0, points_against: team.points_against || 0 }
+                            }
+
+                            const sortedStandings = [...standings].sort((a, b) => {
+                              const aRec = getTeamRecord(a)
+                              const bRec = getTeamRecord(b)
+                              if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins
+                              if (aRec.losses !== bRec.losses) return aRec.losses - bRec.losses
+                              return (bRec.points_for - bRec.points_against) - (aRec.points_for - aRec.points_against)
+                            })
+
+                            return sortedStandings.map((team, index) => {
+                              const rec = getTeamRecord(team)
+                              return (
+                                <tr key={team.id} className="border-b last:border-0">
+                                  <td className="py-3 pr-4 font-medium">{index + 1}</td>
+                                  <td className="py-3 pr-4">
+                                    <div className="flex items-center gap-2">
+                                      {team.logo_url ? (
+                                        <img src={team.logo_url} alt="" className="h-5 w-5 object-contain" />
+                                      ) : (
+                                        <div className="h-4 w-4 rounded-full" style={{ backgroundColor: team.color }} />
+                                      )}
+                                      <span className="font-medium">{team.name}</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-3 pr-4 text-center text-green-600 font-semibold">{rec.wins}</td>
+                                  <td className="py-3 pr-4 text-center text-red-600 font-semibold">{rec.losses}</td>
+                                  <td className="py-3 pr-4 text-center text-slate-500 font-semibold">{rec.ties}</td>
+                                  <td className="py-3 pr-4 text-center font-semibold text-blue-600">
+                                    {(() => {
+                                      const total = rec.wins + rec.losses + rec.ties
+                                      return total > 0 ? ((rec.wins + rec.ties * 0.5) / total).toFixed(3) : '.000'
+                                    })()}
+                                  </td>
+                                  <td className="py-3 pr-4 text-center text-sm">
+                                    <span className="text-green-600">{team.home_wins || 0}</span>
+                                    <span className="text-slate-400">-</span>
+                                    <span className="text-red-600">{team.home_losses || 0}</span>
+                                    {(team.home_ties || 0) > 0 && <><span className="text-slate-400">-</span><span className="text-slate-500">{team.home_ties}</span></>}
+                                  </td>
+                                  <td className="py-3 pr-4 text-center text-sm">
+                                    <span className="text-green-600">{team.away_wins || 0}</span>
+                                    <span className="text-slate-400">-</span>
+                                    <span className="text-red-600">{team.away_losses || 0}</span>
+                                    {(team.away_ties || 0) > 0 && <><span className="text-slate-400">-</span><span className="text-slate-500">{team.away_ties}</span></>}
+                                  </td>
+                                  {league?.has_groups && (
+                                    <td className="py-3 pr-4 text-center font-medium">{team.group_rank_2 || '-'}</td>
+                                  )}
+                                  <td className="py-3 pr-4 text-center">{rec.points_for}</td>
+                                  <td className="py-3 pr-4 text-center">{rec.points_against}</td>
+                                  <td className="py-3 pr-4 text-center font-semibold">
+                                    {rec.points_for - rec.points_against > 0 ? '+' : ''}{rec.points_for - rec.points_against}
+                                  </td>
+                                  <td className="py-3 text-center">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => openStatsEditDialog(team)}
+                                      className="h-8 w-8 text-slate-400 hover:text-blue-600"
+                                      disabled={league.is_finished}
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </Button>
+                                  </td>
+                                </tr>
+                              )
+                            })
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
               )}
+
             </CardContent>
           </Card>
         </TabsContent>
@@ -2777,8 +2720,67 @@ export default function LeagueDetailPage() {
                   <div className="space-y-2">
                     {seasons.filter(s => s.is_finished).map(season => (
                       <div key={season.id} className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded">
-                        <span className="font-medium">{season.name}</span>
-                        <span className="text-xs text-slate-500">Ended</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{season.name}</span>
+                          <span className="text-xs text-slate-500">Ended</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedStandingsSeasonId(season.id)
+                              setStandingsSubTab('table')
+                              setActiveTab('standings')
+                            }}
+                          >
+                            View Standings
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              const newName = prompt('Rename season', season.name)
+                              if (!newName || newName === season.name) return
+                              try {
+                                await seasonApi.update(season.id, { name: newName.trim() })
+                                await loadData()
+                              } catch (e) {
+                                console.error('Failed to rename season:', e)
+                                alert('Failed to rename: ' + e.message)
+                              }
+                            }}
+                          >
+                            Rename
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              if (currentSeason && !currentSeason.is_finished) {
+                                if (!confirm(`Reopen "${season.name}"? This will end the current season "${currentSeason.name}" and make "${season.name}" the current season again.`)) return
+                                try {
+                                  await seasonApi.end(currentSeason.id)
+                                } catch (e) {
+                                  console.error('Failed to end current season:', e)
+                                  alert('Failed to end current season: ' + e.message)
+                                  return
+                                }
+                              } else if (!confirm(`Reopen "${season.name}" and make it the current season?`)) {
+                                return
+                              }
+                              try {
+                                await seasonApi.update(season.id, { is_finished: false, is_current: true })
+                                await loadData()
+                              } catch (e) {
+                                console.error('Failed to reopen season:', e)
+                                alert('Failed to reopen: ' + e.message)
+                              }
+                            }}
+                          >
+                            Reopen
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -3028,7 +3030,7 @@ export default function LeagueDetailPage() {
                       onClick={async () => {
                         if (confirm('Are you sure you want to reopen this league for editing?')) {
                           await leagueApi.update(league.id, { is_finished: false })
-                          loadLeague()
+                          loadData()
                         }
                       }}
                     >
@@ -3046,7 +3048,7 @@ export default function LeagueDetailPage() {
                       onClick={async () => {
                         if (confirm('Are you sure you want to finish this league? This will lock all editing.')) {
                           await leagueApi.update(league.id, { is_finished: true })
-                          loadLeague()
+                          loadData()
                         }
                       }}
                     >

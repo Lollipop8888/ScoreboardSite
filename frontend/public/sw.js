@@ -11,8 +11,8 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('push', (event) => {
-  console.log('Push notification received:', event);
-  
+  console.log('[SW] push event received. hasData:', !!event.data);
+
   let data = {
     title: 'Scoreboard Update',
     body: 'Something happened in a game you follow!',
@@ -21,15 +21,17 @@ self.addEventListener('push', (event) => {
     tag: 'scoreboard-notification',
     data: {}
   };
-  
+
   if (event.data) {
     try {
       data = { ...data, ...event.data.json() };
+      console.log('[SW] push payload parsed:', data);
     } catch (e) {
       data.body = event.data.text();
+      console.log('[SW] push payload (text):', data.body);
     }
   }
-  
+
   const options = {
     body: data.body,
     icon: data.icon || '/logo.png',
@@ -38,11 +40,14 @@ self.addEventListener('push', (event) => {
     data: data.data || {},
     vibrate: [200, 100, 200],
     actions: data.actions || [],
-    requireInteraction: data.requireInteraction || false
+    // Require interaction keeps it on screen until user acts on it.
+    requireInteraction: true,
   };
-  
+
   event.waitUntil(
     self.registration.showNotification(data.title, options)
+      .then(() => console.log('[SW] showNotification resolved'))
+      .catch((err) => console.error('[SW] showNotification failed:', err))
   );
 });
 

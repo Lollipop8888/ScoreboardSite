@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Set, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, status
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -20,7 +20,7 @@ from database import engine, get_db, Base
 
 
 # Create uploads directory for team logos
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -464,6 +464,28 @@ async def end_season(
     return db_season
 
 
+@app.put("/api/team-season-stats/{stats_id}", response_model=schemas.TeamSeasonStats)
+def update_team_season_stats(
+    stats_id: str,
+    stats_update: schemas.TeamSeasonStatsUpdate,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user),
+):
+    """Update a single team's season stats (manual override)."""
+    stats = db.query(models.TeamSeasonStats).filter(models.TeamSeasonStats.id == stats_id).first()
+    if not stats:
+        raise HTTPException(status_code=404, detail="Team season stats not found")
+    # Ownership check via the team's league
+    team = db.query(models.Team).filter(models.Team.id == stats.team_id).first()
+    if team:
+        check_league_ownership(db, team.league_id, current_user)
+    for key, value in stats_update.model_dump(exclude_unset=True).items():
+        setattr(stats, key, value)
+    db.commit()
+    db.refresh(stats)
+    return stats
+
+
 @app.get("/api/seasons/{season_id}/standings", response_model=List[schemas.TeamSeasonStats])
 def get_season_standings(season_id: str, db: Session = Depends(get_db)):
     """Get standings for a specific season"""
@@ -645,9 +667,86 @@ def get_league_teams(league_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/leagues/{league_id}/standings", response_model=List[schemas.Team])
-def get_league_standings(league_id: str, db: Session = Depends(get_db)):
+def get_league_standings(
+    league_id: str,
+    phase: str | None = Query(default=None, description="Filter by season phase: preseason, regular, playoffs"),
+    db: Session = Depends(get_db)
+):
     teams = db.query(models.Team).filter(models.Team.league_id == league_id).all()
-    # Sort by wins (desc), then losses (asc), then point differential
+
+    # Default behavior (no phase filter) returns persisted all-time stats
+    if not phase or phase == "overall":
+        sorted_teams = sorted(teams, key=lambda t: (
+            -t.wins,
+            t.losses,
+            -(t.points_for - t.points_against)
+        ))
+        return sorted_teams
+
+    # Phase-filtered standings: compute W/L/T and PF/PA from final games in that phase
+    phase = phase.lower()
+    q = (
+        db.query(models.Game)
+        .outerjoin(models.Season, models.Game.season_id == models.Season.id)
+        .filter(models.Game.league_id == league_id)
+        .filter(models.Game.status == "final")
+    )
+
+    if phase == "regular":
+        # Treat games with no season as regular by default
+        q = q.filter((models.Season.phase == "regular") | (models.Game.season_id == None))
+    else:
+        q = q.filter(models.Season.phase == phase)
+
+    games = q.all()
+
+    # Build computed map
+    computed: dict[str, dict[str, int]] = {
+        t.id: {"wins": 0, "losses": 0, "ties": 0, "points_for": 0, "points_against": 0}
+        for t in teams
+    }
+
+    for g in games:
+        # Skip games that are missing teams
+        if not g.home_team_id or not g.away_team_id:
+            continue
+
+        # Points
+        if g.home_team_id in computed:
+            computed[g.home_team_id]["points_for"] += int(g.home_score or 0)
+            computed[g.home_team_id]["points_against"] += int(g.away_score or 0)
+        if g.away_team_id in computed:
+            computed[g.away_team_id]["points_for"] += int(g.away_score or 0)
+            computed[g.away_team_id]["points_against"] += int(g.home_score or 0)
+
+        # Result
+        if (g.home_score or 0) > (g.away_score or 0):
+            if g.home_team_id in computed:
+                computed[g.home_team_id]["wins"] += 1
+            if g.away_team_id in computed:
+                computed[g.away_team_id]["losses"] += 1
+        elif (g.away_score or 0) > (g.home_score or 0):
+            if g.away_team_id in computed:
+                computed[g.away_team_id]["wins"] += 1
+            if g.home_team_id in computed:
+                computed[g.home_team_id]["losses"] += 1
+        else:
+            if g.home_team_id in computed:
+                computed[g.home_team_id]["ties"] += 1
+            if g.away_team_id in computed:
+                computed[g.away_team_id]["ties"] += 1
+
+    # Overwrite on the ORM objects in-memory (no DB commit) so the existing Team schema can be reused.
+    for t in teams:
+        c = computed.get(t.id)
+        if not c:
+            continue
+        t.wins = c["wins"]
+        t.losses = c["losses"]
+        t.ties = c["ties"]
+        t.points_for = c["points_for"]
+        t.points_against = c["points_against"]
+
     sorted_teams = sorted(teams, key=lambda t: (
         -t.wins,
         t.losses,
@@ -669,9 +768,6 @@ async def update_team(
     # Check user owns the league this team belongs to
     check_league_ownership(db, db_team.league_id, current_user)
     for key, value in team.model_dump(exclude_unset=True).items():
-        # Convert trophies dict to JSON string
-        if key == 'trophies' and value is not None:
-            value = json.dumps(value)
         setattr(db_team, key, value)
     db.commit()
     db.refresh(db_team)

@@ -8,10 +8,11 @@ Creates:
 """
 
 import sqlite3
+import os
 import uuid
 from datetime import datetime
 
-DB_PATH = "scoreboard.db"
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scoreboard.db"))
 
 def generate_uuid():
     return str(uuid.uuid4())

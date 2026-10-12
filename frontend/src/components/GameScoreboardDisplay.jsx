@@ -1401,9 +1401,9 @@ export function GameScoreboardDisplay({
               </div>
             )}
             <p className="text-sm font-medium">{awayTeam.name}</p>
-            {showRecords && teamRecords?.away && (
-              <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.away)}</p>
-            )}
+            <div className={`overflow-hidden transition-all duration-300 ease-in-out ${showRecords && teamRecords?.away ? 'max-h-6 opacity-100' : 'max-h-0 opacity-0'}`}>
+              <p className="text-xs text-slate-400 font-medium">{teamRecords?.away ? formatRecord(teamRecords.away) : ''}</p>
+            </div>
             {possession === 'away' && !hidePossession && (
               <div className="flex items-center justify-center gap-1.5 mt-1">
                 <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
@@ -1592,9 +1592,9 @@ export function GameScoreboardDisplay({
               </div>
             )}
             <p className="text-sm font-medium">{homeTeam.name}</p>
-            {showRecords && teamRecords?.home && (
-              <p className="text-xs text-slate-400 font-medium">{formatRecord(teamRecords.home)}</p>
-            )}
+            <div className={`overflow-hidden transition-all duration-300 ease-in-out ${showRecords && teamRecords?.home ? 'max-h-6 opacity-100' : 'max-h-0 opacity-0'}`}>
+              <p className="text-xs text-slate-400 font-medium">{teamRecords?.home ? formatRecord(teamRecords.home) : ''}</p>
+            </div>
             {possession === 'home' && !hidePossession && (
               <div className="flex items-center justify-center gap-1.5 mt-1">
                 <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>

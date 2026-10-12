@@ -3,9 +3,10 @@ Migration script to add game_unit_label to leagues and game_unit to games tables
 Run this once to update the database schema.
 """
 import sqlite3
+import os
 
 def migrate():
-    conn = sqlite3.connect('scoreboard.db')
+    conn = sqlite3.connect(os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scoreboard.db")))
     cursor = conn.cursor()
     
     # Check if game_unit_label column exists in leagues table
