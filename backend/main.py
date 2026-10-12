@@ -927,6 +927,30 @@ def recompute_season_stats(db: Session, season_id: Optional[str]):
         apply_game_result(stats[g.away_team_id], phase, g.away_score or 0, g.home_score or 0)
 
 
+TEAM_RECORD_FIELDS = SEASON_STAT_FIELDS + ["home_wins", "home_losses", "home_ties", "away_wins", "away_losses", "away_ties"]
+
+
+def recompute_team_records(db: Session, league_id: str):
+    """Rebuild each team's W/L (the main standings) from the final scores of the league's current season,
+    or from all of the league's final games if it has no current season. Past seasons don't affect it."""
+    teams = {t.id: t for t in db.query(models.Team).filter(models.Team.league_id == league_id)}
+    current = db.query(models.Season).filter(models.Season.league_id == league_id, models.Season.is_current == True).first()
+
+    q = db.query(models.Game).filter(models.Game.league_id == league_id, models.Game.status == "final")
+    if current:
+        q = q.filter(models.Game.season_id == current.id)
+
+    for t in teams.values():
+        for field in TEAM_RECORD_FIELDS:
+            setattr(t, field, 0)
+    for g in q.all():
+        if g.home_team_id not in teams or g.away_team_id not in teams:
+            continue
+        phase = get_game_phase(g, current.phase if current else None)
+        apply_game_result(teams[g.home_team_id], phase, g.home_score or 0, g.away_score or 0, side="home")
+        apply_game_result(teams[g.away_team_id], phase, g.away_score or 0, g.home_score or 0, side="away")
+
+
 @app.post("/api/games", response_model=schemas.GameWithTeams)
 async def create_game(
     game: schemas.GameCreate, 
@@ -1082,16 +1106,11 @@ async def update_game(
             )
     elif game_update.status == "final" and old_status != "final":
         db_game.ended_at = datetime.utcnow()
-        # Update team records
+        # Team records are rebuilt from final scores after the commit below
         home_team = db.query(models.Team).filter(models.Team.id == db_game.home_team_id).first()
         away_team = db.query(models.Team).filter(models.Team.id == db_game.away_team_id).first()
         
-        season = db.query(models.Season).filter(models.Season.id == db_game.season_id).first() if db_game.season_id else None
-        game_phase = get_game_phase(db_game, season.phase if season else None)
-        
         if home_team and away_team:
-            apply_game_result(home_team, game_phase, db_game.home_score, db_game.away_score, side="home")
-            apply_game_result(away_team, game_phase, db_game.away_score, db_game.home_score, side="away")
             if db_game.home_score > db_game.away_score:
                 winner = home_team.name
             elif db_game.away_score > db_game.home_score:
@@ -1122,10 +1141,11 @@ async def update_game(
     
     db.commit()
     
-    # Keep season standings in sync whenever a final game is involved (new final, score fix, un-finalized, season moved)
+    # Keep standings and team W/L in sync whenever a final game is involved (new final, score fix, un-finalized, season moved)
     if old_status == "final" or db_game.status == "final":
         for season_id in {old_season_id, db_game.season_id}:
             recompute_season_stats(db, season_id)
+        recompute_team_records(db, db_game.league_id)
         db.commit()
     
     # Broadcast update to WebSocket clients
@@ -1203,10 +1223,12 @@ async def delete_game(
     check_league_ownership(db, db_game.league_id, current_user)
     season_id = db_game.season_id
     was_final = db_game.status == "final"
+    league_id = db_game.league_id
     db.delete(db_game)
     db.commit()
     if was_final:
         recompute_season_stats(db, season_id)
+        recompute_team_records(db, league_id)
         db.commit()
     return None
 
