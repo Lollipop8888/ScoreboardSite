@@ -1094,14 +1094,14 @@ async def update_game(
                 db, db_game.league_id,
                 "Game Started!",
                 f"{away_team.name} vs {home_team.name} is now live",
-                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
                 notification_type="game_start"
             )
             notifications.notify_game_followers(
                 db, game_id,
                 "Game Started!",
                 f"{away_team.name} vs {home_team.name} is now live",
-                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
                 notification_type="game_start"
             )
     elif game_update.status == "final" and old_status != "final":
@@ -1128,14 +1128,14 @@ async def update_game(
                 db, db_game.league_id,
                 "Game Ended",
                 body,
-                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
                 notification_type="game_end"
             )
             notifications.notify_game_followers(
                 db, game_id,
                 "Game Ended",
                 body,
-                {"url": f"/games/{db_game.share_code}", "game_id": game_id},
+                {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
                 notification_type="game_end"
             )
     

@@ -12,8 +12,9 @@ import models
 # (the Docker image points this at /data/vapid_private.pem) or VAPID_PRIVATE_KEY (PEM).
 # The public key must match frontend/src/lib/notifications.js.
 VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', 'BPmdvQmzKsfRYLqzL-CKmVC1TimdNoTro7zVTVZWJjx9SctszKqByW9_I2przLSI2QchrNsX2Kb4cj0GWO7cZEU')
+# Apple's push service rejects a "sub" that isn't a real mailto: or https: URL (403 BadJwtToken)
 VAPID_CLAIMS = {
-    "sub": "mailto:admin@scoreboard.local"
+    "sub": os.getenv('VAPID_SUBJECT', 'https://gridironscore.com')
 }
 
 

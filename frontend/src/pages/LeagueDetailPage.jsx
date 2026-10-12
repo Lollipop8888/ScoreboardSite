@@ -25,6 +25,9 @@ import {
 } from '@/components/ui/select'
 import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, teamSeasonStatsApi, inviteApi, followApi, notificationApi, createWebSocket } from '@/lib/api'
 import { requestNotificationPermission, subscribeToPush, getPushUnsupportedReason } from '@/lib/notifications'
+
+// Notification permission for this device, or null if push can't be used here (e.g. iOS Safari not added to Home Screen)
+const getPushPermission = () => (getPushUnsupportedReason() ? null : Notification.permission)
 import { Bell, BellOff } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { QRCodeSVG } from 'qrcode.react'
@@ -131,6 +134,7 @@ export default function LeagueDetailPage() {
   const [inviteError, setInviteError] = useState('')
   const [inviteSuccess, setInviteSuccess] = useState('')
   const [isFollowing, setIsFollowing] = useState(false)
+  const [pushPermission, setPushPermission] = useState(getPushPermission)
   const [followLoading, setFollowLoading] = useState(false)
   
   // Form states
@@ -170,7 +174,10 @@ export default function LeagueDetailPage() {
     followApi.getAll()
       .then((follows) => {
         if (cancelled) return
-        setIsFollowing((follows || []).some(f => f.league_id === leagueId))
+        const following = (follows || []).some(f => f.league_id === leagueId)
+        setIsFollowing(following)
+        // Re-register this device's push subscription (it can expire, or this may be a new install)
+        if (following && getPushPermission() === 'granted') subscribeToPush()
       })
       .catch((err) => console.error('Failed to check follow status:', err))
     return () => { cancelled = true }
@@ -737,16 +744,18 @@ export default function LeagueDetailPage() {
                     await followApi.unfollowLeague(leagueId)
                     setIsFollowing(false)
                   } else {
-                    // Follow first so the user gets the in-app relationship even
-                    // if push can't be enabled (e.g. iOS Safari not installed as PWA).
+                    // Ask for notification permission before any await: iOS only shows the
+                    // prompt while still handling the tap. Following works even if push can't.
+                    const unsupported = getPushUnsupportedReason()
+                    const permissionRequest = unsupported ? null : requestNotificationPermission()
                     await followApi.followLeague(leagueId)
                     setIsFollowing(true)
 
-                    const unsupported = getPushUnsupportedReason()
                     if (unsupported) {
                       alert('Followed! ' + unsupported)
                     } else {
-                      const hasPermission = await requestNotificationPermission()
+                      const hasPermission = await permissionRequest
+                      setPushPermission(getPushPermission())
                       if (hasPermission) {
                         const sub = await subscribeToPush()
                         if (!sub) {
@@ -767,6 +776,23 @@ export default function LeagueDetailPage() {
             >
               {isFollowing ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
               {isFollowing ? 'Following' : 'Follow'}
+            </Button>
+          )}
+          {user && isFollowing && pushPermission === 'default' && (
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={async () => {
+                // Following on another device (or before adding to Home Screen) doesn't turn on alerts here
+                const hasPermission = await requestNotificationPermission()
+                setPushPermission(getPushPermission())
+                if (hasPermission && !(await subscribeToPush())) {
+                  alert('Could not enable push notifications on this device.')
+                }
+              }}
+            >
+              <Bell className="h-4 w-4" />
+              Enable alerts
             </Button>
           )}
           <Button
