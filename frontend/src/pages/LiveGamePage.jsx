@@ -87,6 +87,23 @@ const NFL_PENALTIES = [
   { name: 'Other', yards: 0, category: 'Other' },
 ]
 
+// Stats that can be shown on the scoreboard, each with its own toggle
+const DISPLAY_STAT_BUTTONS = [
+  { key: 'quarterScores', label: 'Qtr Scores', activeClass: 'bg-purple-600' },
+  { key: 'turnovers', label: 'Turnovers', activeClass: 'bg-red-600' },
+  { key: 'firstDowns', label: '1st Downs', activeClass: 'bg-green-600' },
+  { key: 'penalties', label: 'Penalties', activeClass: 'bg-yellow-600' },
+  { key: 'thirdDowns', label: '3rd Down', activeClass: 'bg-teal-600' },
+  { key: 'fourthDowns', label: '4th Down', activeClass: 'bg-orange-600' },
+  { key: 'timeOfPossession', label: 'Time of Poss.', activeClass: 'bg-indigo-600' },
+]
+
+// The stats bar shows whenever at least one stat is turned on
+function withDisplayShow(displayStats) {
+  const anyOn = DISPLAY_STAT_BUTTONS.some(b => displayStats[b.key]) || displayStats.customStats?.length > 0
+  return { ...displayStats, show: anyOn }
+}
+
 export default function LiveGamePage({ standalone = false }) {
   const { gameId } = useParams()
   const [game, setGame] = useState(null)
@@ -332,6 +349,9 @@ export default function LiveGamePage({ standalone = false }) {
     turnovers: false,
     firstDowns: false,
     penalties: false,
+    thirdDowns: false,
+    fourthDowns: false,
+    timeOfPossession: false,
     all: false,
     customStats: [] // array of custom stat IDs to display
   })
@@ -698,12 +718,15 @@ export default function LiveGamePage({ standalone = false }) {
           // Universal no good - works for PAT, FG, 2PT
           if (showPATAttempt === 'pat') {
             setBigPlay('pat-no-good')
+            addGameLogEntry('kick', 'Extra point no good', possession)
             setShowPATAttempt(null)
           } else if (showPATAttempt === '2pt') {
             setBigPlay('2pt-no-good')
+            addGameLogEntry('kick', '2-point conversion failed', possession)
             setShowPATAttempt(null)
           } else if (showFGAttempt) {
             setBigPlay('fg-no-good')
+            addGameLogEntry('kick', `Field goal no good${fgDistance ? ` - ${fgDistance} yd` : ''}`, possession)
             setShowFGAttempt(false)
           }
           break
@@ -800,7 +823,7 @@ export default function LiveGamePage({ standalone = false }) {
           break
         case 'turnover':
           stopTimer()
-          recordPlayResult('turnover')
+          recordPlayResult('turnover', 'Turnover')
           setShowTurnover(possession === 'home' ? 'away' : 'home')
           setTimeout(() => setShowTurnover(null), 3000)
           setPossession(prev => prev === 'home' ? 'away' : 'home')
@@ -903,6 +926,39 @@ export default function LiveGamePage({ standalone = false }) {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [game, timerRunning, awayTimeouts, homeTimeouts, possession, playClockRunning, playClock, down, showPATAttempt, showFGAttempt, showInjury, keybindsEnabled])
+
+  // The game clock tick runs from a timeout chain, so it reads possession from a ref
+  const possessionRef = useRef(possession)
+  useEffect(() => { possessionRef.current = possession }, [possession])
+
+  // Game log: missed kicks from the PAT/2PT/FG result buttons (good kicks are logged as scores)
+  useEffect(() => {
+    if (['no-good', 'doink', 'blocked'].includes(fgResult)) {
+      const how = { 'no-good': 'no good', doink: 'no good (doink)', blocked: 'blocked' }[fgResult]
+      addGameLogEntry('kick', `Field goal ${how}${fgDistance ? ` - ${fgDistance} yd` : ''}`, possession)
+    }
+  }, [fgResult])
+  useEffect(() => {
+    if (patResult === 'no-good') {
+      addGameLogEntry('kick', showPATAttempt === '2pt' ? '2-point conversion failed' : 'Extra point no good', possession)
+    }
+  }, [patResult])
+
+  // Game log: quarter changes
+  const lastQuarterRef = useRef(null)
+  useEffect(() => {
+    if (!game?.quarter) return
+    const last = lastQuarterRef.current
+    lastQuarterRef.current = { id: game.id, quarter: game.quarter }
+    if (!last || last.id !== game.id || last.quarter === game.quarter) return
+    if (game.quarter === 'Final') {
+      addGameLogEntry('quarter', `Final: ${game.away_team?.abbreviation} ${game.away_score}, ${game.home_team?.abbreviation} ${game.home_score}`)
+    } else if (game.quarter === 'Halftime') {
+      addGameLogEntry('quarter', `Halftime: ${game.away_team?.abbreviation} ${game.away_score}, ${game.home_team?.abbreviation} ${game.home_score}`)
+    } else if (game.quarter !== 'Pregame') {
+      addGameLogEntry('quarter', `Start of ${game.quarter}`)
+    }
+  }, [game?.id, game?.quarter])
 
   // Points by quarter follow the score itself, so every way of scoring (TD, PAT, 2PT, FG, safety,
   // manual +/-) is counted, and corrections take points back off.
@@ -1139,6 +1195,7 @@ export default function LiveGamePage({ standalone = false }) {
     // Points by quarter are tracked from score changes (see the quick stats effect)
     // An offensive TD on 3rd/4th down is a conversion
     if (delta >= 6 && delta <= 8 && team === possession) recordPlayResult('touchdown')
+    if (newScore !== currentScore) addGameLogEntry(delta < 0 ? 'correction' : 'score', describeScore(newScore - currentScore, celebrationData), team)
     
     // Trigger celebration overlay for TDs, FGs, Safeties, and conversions
     if (delta === 6 || delta === 7 || delta === 8) {
@@ -1167,6 +1224,7 @@ export default function LiveGamePage({ standalone = false }) {
     const currentScore = team === 'home' ? game.home_score : game.away_score
     const newScore = currentScore + 2
     
+    addGameLogEntry('score', 'Safety', team)
     await updateGame({ [field]: newScore })
     setScoreCelebration({ type: 'safety', team, points: 2 })
     setTimeout(() => {
@@ -1189,6 +1247,7 @@ export default function LiveGamePage({ standalone = false }) {
     const field = team === 'home' ? 'home_score' : 'away_score'
     const currentScore = team === 'home' ? game.home_score : game.away_score
     const newScore = currentScore + 2
+    addGameLogEntry('score', '2-point conversion good', team)
     await updateGame({ [field]: newScore })
     setScoreCelebration({ type: '2pt', team, points: 2 })
     setTimeout(() => setScoreCelebration(null), 2000)
@@ -1214,16 +1273,29 @@ export default function LiveGamePage({ standalone = false }) {
   // Add entry to game log
   function addGameLogEntry(type, description, team = null) {
     const entry = {
-      id: Date.now(),
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       timestamp: new Date().toISOString(),
-      quarter: game?.quarter || 'Pregame',
-      time: game?.game_time || '0:00',
+      quarter: gameRef.current?.quarter || game?.quarter || 'Pregame',
+      time: gameTimeRef.current || gameRef.current?.game_time || game?.game_time || '0:00',
       type,
       description,
       team,
     }
     setGameLog(prev => [...prev, entry])
     return entry
+  }
+
+  // Game log text for a score change made through updateScore
+  function describeScore(delta, details = {}) {
+    if (delta < 0) return `Score correction (${delta})`
+    if (delta >= 6 && delta <= 8) {
+      const play = details.yards ? ` - ${details.yards} yd${details.playType ? ` ${details.playType}` : ''}` : ''
+      return `Touchdown${play}${delta > 6 ? ` (+${delta})` : ''}`
+    }
+    if (delta === 3) return `Field goal good${details.distance ? ` - ${details.distance} yd` : ''}`
+    if (delta === 2) return '2-point conversion good'
+    if (delta === 1) return 'Extra point good'
+    return `+${delta} points`
   }
   
   // Send notification to all viewers watching this game
@@ -1626,6 +1698,12 @@ export default function LiveGamePage({ standalone = false }) {
     const newSeconds = Math.max(0, currentSeconds - 1)
     const newTime = formatTime(newSeconds)
     
+    // Time of possession runs with the game clock for the team with the ball
+    const team = possessionRef.current
+    if (newSeconds < currentSeconds && (team === 'home' || team === 'away')) {
+      setTimeOfPossession(prev => ({ ...prev, [team]: (prev[team] || 0) + 1 }))
+    }
+    
     // Update ref as source of truth
     gameTimeRef.current = newTime
     
@@ -1813,10 +1891,17 @@ export default function LiveGamePage({ standalone = false }) {
   //   'failed'           - didn't convert: next down, incomplete, turnover on downs
   //   'turnover'         - interception or lost fumble (a turnover and a failed 3rd/4th down)
   // Punts and field goals aren't down attempts, so they aren't recorded here.
-  function recordPlayResult(result) {
+  // `detail` (e.g. 'Interception') is written to the game log.
+  function recordPlayResult(result, detail = null) {
     const team = possession
     if (team !== 'home' && team !== 'away') return
     const playDown = down
+    // Game log: first downs (noting 3rd/4th down conversions), and anything given a description
+    if (result === 'firstDown') {
+      addGameLogEntry('down', playDown >= 3 ? `First down (${playDown === 3 ? '3rd' : '4th'} down conversion)` : 'First down', team)
+    } else if (detail) {
+      addGameLogEntry(result === 'turnover' ? 'turnover' : 'down', detail, team)
+    }
     setQuickStats(s => {
       const t = { ...s[team] }
       if (result === 'firstDown' || result === 'penaltyFirstDown') t.firstDowns = (t.firstDowns || 0) + 1
@@ -1890,6 +1975,10 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Timeout functions
   function useTimeout(team) {
+    if ((team === 'home' && homeTimeouts > 0) || (team === 'away' && awayTimeouts > 0)) {
+      const left = (team === 'home' ? homeTimeouts : awayTimeouts) - 1
+      addGameLogEntry('timeout', `Timeout (${left} left)`, team)
+    }
     if (team === 'home' && homeTimeouts > 0) {
       const usedIndex = homeTimeouts // The timeout being used (before decrement)
       setUsedTimeoutIndex(usedIndex)
@@ -2217,8 +2306,9 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Apply penalty - update D&D based on penalty and hide flag
   function applyPenalty() {
-    // Track penalties in quick stats
+    // Track penalties in quick stats and the game log
     selectedPenalties.forEach(sp => {
+      addGameLogEntry('penalty', `${sp.penalty.name}${sp.penalty.yards ? ` - ${sp.penalty.yards} yds` : ''}`, sp.team)
       setQuickStats(s => ({
         ...s,
         [sp.team]: {
@@ -3187,6 +3277,7 @@ export default function LiveGamePage({ standalone = false }) {
               hideClock={hideClock}
               displayStats={displayStats}
               quickStats={quickStats}
+              timeOfPossession={timeOfPossession}
               showCoinToss={showCoinToss}
               coinTossData={coinToss}
             />
@@ -4945,7 +5036,7 @@ export default function LiveGamePage({ standalone = false }) {
                     onClick={() => {
                       setShowTurnoverOnDownsConfirm(false)
                       stopTimer()
-                      recordPlayResult('failed')
+                      recordPlayResult('failed', 'Turnover on downs')
                       setShowTurnover('downs')
                       setBigPlay('turnover-on-downs')
                       setTimeout(() => setBigPlay(null), 4000)
@@ -4978,7 +5069,8 @@ export default function LiveGamePage({ standalone = false }) {
                     onClick={() => {
                       // Confirm turnover - no review
                       // A turnover on downs is a failed 4th down, not a turnover in the stats
-                      recordPlayResult(pendingTurnoverReview === 'downs' ? 'failed' : 'turnover')
+                      if (pendingTurnoverReview === 'downs') recordPlayResult('failed', 'Turnover on downs')
+                      else recordPlayResult('turnover', 'Interception')
                       togglePossession()
                       setPendingTurnoverReview(null)
                       setTimeout(() => { 
@@ -5034,7 +5126,7 @@ export default function LiveGamePage({ standalone = false }) {
                     <Button 
                       className="bg-blue-600 hover:bg-blue-700"
                       onClick={() => {
-                        recordPlayResult('turnover')
+                        recordPlayResult('turnover', 'Interception - touchback')
                         togglePossession()
                         setPendingTurnoverReview(null)
                         setShowTurnover(null)
@@ -5059,7 +5151,7 @@ export default function LiveGamePage({ standalone = false }) {
                         setPendingTurnoverReview(null)
                         setShowTurnover(null)
                         // Track turnover
-                        recordPlayResult('turnover')
+                        recordPlayResult('turnover', 'Interception - returned for TD')
                         // Show TD panel for the intercepting team
                         setShowTDPanel(scoringTeam)
                       }}
@@ -5129,7 +5221,7 @@ export default function LiveGamePage({ standalone = false }) {
                     setPendingTurnoverReview(null)
                     setShowTurnover(null)
                     // Track turnover
-                    recordPlayResult('turnover')
+                    recordPlayResult('turnover', 'Fumble lost - returned for TD')
                     // Show TD panel for the recovering team
                     setShowTDPanel(scoringTeam)
                   }}
@@ -5167,7 +5259,7 @@ export default function LiveGamePage({ standalone = false }) {
                     className="bg-red-600 hover:bg-red-700"
                     onClick={() => {
                       // Track fumble turnover in quick stats (offense loses ball)
-                      recordPlayResult('turnover')
+                      recordPlayResult('turnover', 'Fumble lost')
                       setPendingFumble(false)
                       togglePossession()
                       setShowFumbleRecovery('defense')
@@ -5936,6 +6028,7 @@ export default function LiveGamePage({ standalone = false }) {
                       const receivingTeam = possession === 'home' ? 'away' : possession === 'away' ? 'home' : null
                       if (receivingTeam) {
                         setQuickStats(s => ({ ...s, [receivingTeam]: { ...s[receivingTeam], turnovers: (s[receivingTeam].turnovers || 0) + 1 } }))
+                        addGameLogEntry('turnover', 'Muffed punt - recovered by kicking team', receivingTeam)
                       }
                       setGameStatus(null)
                       stopTimer()
@@ -7881,70 +7974,25 @@ export default function LiveGamePage({ standalone = false }) {
                     size="sm" 
                     variant={displayStats.all ? "default" : "outline"}
                     className={displayStats.all ? "bg-blue-600" : ""}
-                    onClick={() => setDisplayStats(prev => ({ 
-                      ...prev, 
-                      show: !prev.all,
-                      all: !prev.all,
-                      quarterScores: !prev.all,
-                      turnovers: !prev.all,
-                      firstDowns: !prev.all,
-                      penalties: !prev.all
+                    onClick={() => setDisplayStats(prev => withDisplayShow({
+                      ...prev,
+                      ...Object.fromEntries(DISPLAY_STAT_BUTTONS.map(b => [b.key, !prev.all])),
+                      all: !prev.all
                     }))}
                   >
                     {displayStats.all ? '📺 Hide All' : '📺 Show All'}
                   </Button>
-                  <Button 
-                    size="sm" 
-                    variant={displayStats.quarterScores ? "default" : "outline"}
-                    className={displayStats.quarterScores ? "bg-purple-600" : ""}
-                    onClick={() => setDisplayStats(prev => ({ 
-                      ...prev, 
-                      show: !prev.quarterScores || prev.turnovers || prev.firstDowns || prev.penalties,
-                      quarterScores: !prev.quarterScores,
-                      all: false
-                    }))}
-                  >
-                    Qtr Scores
-                  </Button>
-                  <Button 
-                    size="sm" 
-                    variant={displayStats.turnovers ? "default" : "outline"}
-                    className={displayStats.turnovers ? "bg-red-600" : ""}
-                    onClick={() => setDisplayStats(prev => ({ 
-                      ...prev, 
-                      show: prev.quarterScores || !prev.turnovers || prev.firstDowns || prev.penalties,
-                      turnovers: !prev.turnovers,
-                      all: false
-                    }))}
-                  >
-                    Turnovers
-                  </Button>
-                  <Button 
-                    size="sm" 
-                    variant={displayStats.firstDowns ? "default" : "outline"}
-                    className={displayStats.firstDowns ? "bg-green-600" : ""}
-                    onClick={() => setDisplayStats(prev => ({ 
-                      ...prev, 
-                      show: prev.quarterScores || prev.turnovers || !prev.firstDowns || prev.penalties,
-                      firstDowns: !prev.firstDowns,
-                      all: false
-                    }))}
-                  >
-                    1st Downs
-                  </Button>
-                  <Button 
-                    size="sm" 
-                    variant={displayStats.penalties ? "default" : "outline"}
-                    className={displayStats.penalties ? "bg-yellow-600" : ""}
-                    onClick={() => setDisplayStats(prev => ({ 
-                      ...prev, 
-                      show: prev.quarterScores || prev.turnovers || prev.firstDowns || !prev.penalties,
-                      penalties: !prev.penalties,
-                      all: false
-                    }))}
-                  >
-                    Penalties
-                  </Button>
+                  {DISPLAY_STAT_BUTTONS.map(b => (
+                    <Button 
+                      key={b.key}
+                      size="sm" 
+                      variant={displayStats[b.key] ? "default" : "outline"}
+                      className={displayStats[b.key] ? b.activeClass : ""}
+                      onClick={() => setDisplayStats(prev => withDisplayShow({ ...prev, [b.key]: !prev[b.key], all: false }))}
+                    >
+                      {b.label}
+                    </Button>
+                  ))}
                   {/* Custom stat display buttons */}
                   {quickStats.custom?.map(stat => (
                     <Button 
@@ -7957,12 +8005,7 @@ export default function LiveGamePage({ standalone = false }) {
                         const newCustomStats = isShowing 
                           ? prev.customStats.filter(id => id !== stat.id)
                           : [...(prev.customStats || []), stat.id]
-                        return { 
-                          ...prev, 
-                          show: prev.quarterScores || prev.turnovers || prev.firstDowns || prev.penalties || newCustomStats.length > 0,
-                          customStats: newCustomStats,
-                          all: false
-                        }
+                        return withDisplayShow({ ...prev, customStats: newCustomStats, all: false })
                       })}
                     >
                       {stat.shortLabel || stat.label}
@@ -8163,8 +8206,15 @@ export default function LiveGamePage({ standalone = false }) {
                           entry.type === 'score' ? 'bg-green-100 text-green-700' :
                           entry.type === 'turnover' ? 'bg-red-100 text-red-700' :
                           entry.type === 'penalty' ? 'bg-yellow-100 text-yellow-700' :
+                          entry.type === 'down' ? 'bg-blue-100 text-blue-700' :
+                          entry.type === 'kick' ? 'bg-orange-100 text-orange-700' :
                           'bg-slate-100 text-slate-600'
                         }`}>{entry.type}</span>
+                        {entry.team && (
+                          <span className="font-semibold" style={{ color: entry.team === 'home' ? game.home_team?.color : game.away_team?.color }}>
+                            {entry.team === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation}
+                          </span>
+                        )}
                         <span className="flex-1">{entry.description}</span>
                         <Button 
                           size="sm" 

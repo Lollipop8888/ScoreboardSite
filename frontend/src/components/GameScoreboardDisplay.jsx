@@ -107,6 +107,7 @@ export function GameScoreboardDisplay({
   hideClock,
   displayStats,
   quickStats,
+  timeOfPossession,
   viewerCount,
   showCoinToss,
   coinTossData,
@@ -185,6 +186,10 @@ export function GameScoreboardDisplay({
   hideClock = hideClock ?? displayState?.hideClock ?? false
   displayStats = displayStats ?? displayState?.displayStats ?? { show: false, quarterScores: false, turnovers: false, firstDowns: false, penalties: false, all: false }
   quickStats = quickStats ?? displayState?.quickStats ?? { home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 }, away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 } }
+  timeOfPossession = timeOfPossession ?? displayState?.timeOfPossession ?? { home: 0, away: 0 }
+  const formatTOP = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+  const conversions = (team, key) => `${quickStats?.[team]?.[`${key}Conv`] || 0}/${quickStats?.[team]?.[`${key}Att`] || 0}`
+  const showTeamStats = displayStats?.turnovers || displayStats?.firstDowns || displayStats?.penalties || displayStats?.thirdDowns || displayStats?.fourthDowns || displayStats?.timeOfPossession || displayStats?.customStats?.length > 0
 
   // Delayed D&D space removal - after 3 seconds of being hidden, remove the space entirely
   const [removeDownDistanceSpace, setRemoveDownDistanceSpace] = useState(false)
@@ -1657,7 +1662,7 @@ export function GameScoreboardDisplay({
       </div>
       
       {/* Stats Bottom Bar - integrated display */}
-      {displayStats?.show && (displayStats.quarterScores || displayStats.turnovers || displayStats.firstDowns || displayStats.penalties || displayStats.customStats?.length > 0) && (
+      {displayStats?.show && (displayStats.quarterScores || showTeamStats) && (
         <div className="w-full mt-3 bg-slate-800/90 rounded-xl p-3 animate-slide-up">
           {/* Quarter Scores Table */}
           {displayStats.quarterScores && (
@@ -1699,7 +1704,7 @@ export function GameScoreboardDisplay({
           )}
           
           {/* Team Stats - Away on left, stat name in middle, Home on right */}
-          {(displayStats.turnovers || displayStats.firstDowns || displayStats.penalties || displayStats.customStats?.length > 0) && (
+          {showTeamStats && (
             <div className={`space-y-1.5 ${displayStats.quarterScores ? 'pt-2 border-t border-slate-700' : ''}`}>
               {displayStats.turnovers && (
                 <div className="flex items-center justify-between px-2">
@@ -1720,6 +1725,27 @@ export function GameScoreboardDisplay({
                   <span className="text-xl font-bold w-16 text-left" style={{ color: awayTeam.color }}>{quickStats?.away?.penalties || 0}-{quickStats?.away?.penaltyYards || 0}</span>
                   <span className="text-sm font-medium text-slate-300 flex-1 text-center">Penalties-Yards</span>
                   <span className="text-xl font-bold w-16 text-right" style={{ color: homeTeam.color }}>{quickStats?.home?.penalties || 0}-{quickStats?.home?.penaltyYards || 0}</span>
+                </div>
+              )}
+              {displayStats.thirdDowns && (
+                <div className="flex items-center justify-between px-2">
+                  <span className="text-xl font-bold w-16 text-left" style={{ color: awayTeam.color }}>{conversions('away', 'thirdDown')}</span>
+                  <span className="text-sm font-medium text-slate-300 flex-1 text-center">3rd Down Conv.</span>
+                  <span className="text-xl font-bold w-16 text-right" style={{ color: homeTeam.color }}>{conversions('home', 'thirdDown')}</span>
+                </div>
+              )}
+              {displayStats.fourthDowns && (
+                <div className="flex items-center justify-between px-2">
+                  <span className="text-xl font-bold w-16 text-left" style={{ color: awayTeam.color }}>{conversions('away', 'fourthDown')}</span>
+                  <span className="text-sm font-medium text-slate-300 flex-1 text-center">4th Down Conv.</span>
+                  <span className="text-xl font-bold w-16 text-right" style={{ color: homeTeam.color }}>{conversions('home', 'fourthDown')}</span>
+                </div>
+              )}
+              {displayStats.timeOfPossession && (
+                <div className="flex items-center justify-between px-2">
+                  <span className="text-xl font-bold w-16 text-left tabular-nums" style={{ color: awayTeam.color }}>{formatTOP(timeOfPossession.away)}</span>
+                  <span className="text-sm font-medium text-slate-300 flex-1 text-center">Time of Poss.</span>
+                  <span className="text-xl font-bold w-16 text-right tabular-nums" style={{ color: homeTeam.color }}>{formatTOP(timeOfPossession.home)}</span>
                 </div>
               )}
               {/* Custom stats */}
