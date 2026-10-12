@@ -495,8 +495,8 @@ export default function LeagueDetailPage() {
         league_id: leagueId,
         scheduled_at: scheduledAtISO,
         time_tbd: gameForm.scheduled_date ? timeTbd : false,
-        game_unit: gameForm.game_unit ? parseInt(gameForm.game_unit) : null,
-        game_unit_type: gameForm.game_unit ? parseInt(gameForm.game_unit_type) : 1
+        game_unit: gameForm.game_unit !== '' ? parseInt(gameForm.game_unit) : null,
+        game_unit_type: gameForm.game_unit !== '' ? parseInt(gameForm.game_unit_type) : 1
       }
       await gameApi.create(gameData)
       setGameDialogOpen(false)
@@ -539,7 +539,7 @@ export default function LeagueDetailPage() {
       away_team_id: game.away_team?.id || '',
       scheduled_date: scheduledDate,
       scheduled_time: scheduledTime,
-      game_unit: game.game_unit?.toString() || '',
+      game_unit: game.game_unit?.toString() ?? '',
       game_unit_type: (game.game_unit_type || 1).toString()
     })
     setGameEditDialogOpen(true)
@@ -564,8 +564,8 @@ export default function LeagueDetailPage() {
         away_team_id: gameEditForm.away_team_id || null,  // Empty string = TBD (null)
         scheduled_at: scheduledAtISO,
         time_tbd: gameEditForm.scheduled_date ? timeTbd : false,
-        game_unit: gameEditForm.game_unit ? parseInt(gameEditForm.game_unit) : null,
-        game_unit_type: gameEditForm.game_unit ? parseInt(gameEditForm.game_unit_type) : 1
+        game_unit: gameEditForm.game_unit !== '' ? parseInt(gameEditForm.game_unit) : null,
+        game_unit_type: gameEditForm.game_unit !== '' ? parseInt(gameEditForm.game_unit_type) : 1
       })
       setGameEditDialogOpen(false)
       setEditingGame(null)
@@ -1583,7 +1583,7 @@ export default function LeagueDetailPage() {
                             </Select>
                             <Input
                               type="number"
-                              min="1"
+                              min="0"
                               placeholder="Number"
                               className="w-24"
                               value={gameForm.game_unit}
@@ -1657,15 +1657,15 @@ export default function LeagueDetailPage() {
                 let currentWeek = null
                 let currentWeekType = 1
                 
-                if (liveGames.length > 0 && liveGames[0].game_unit) {
+                if (liveGames.length > 0 && liveGames[0].game_unit != null) {
                   currentWeek = liveGames[0].game_unit
                   currentWeekType = liveGames[0].game_unit_type || 1
-                } else if (scheduledGames.length > 0 && scheduledGames[0].game_unit) {
+                } else if (scheduledGames.length > 0 && scheduledGames[0].game_unit != null) {
                   currentWeek = scheduledGames[0].game_unit
                   currentWeekType = scheduledGames[0].game_unit_type || 1
                 }
                 
-                if (!currentWeek) return null
+                if (currentWeek == null) return null
                 
                 const unitLabel = currentWeekType === 2 && league.game_unit_label_2 
                   ? league.game_unit_label_2 
@@ -1736,7 +1736,7 @@ export default function LeagueDetailPage() {
                   ? sortedGames.reduce((acc, game) => {
                       const unitType = game.game_unit_type || 1
                       const unitNum = game.game_unit
-                      const key = unitNum ? `${unitType}-${unitNum}` : 'Unassigned'
+                      const key = unitNum != null ? `${unitType}-${unitNum}` : 'Unassigned'
                       if (!acc[key]) acc[key] = { type: unitType, num: unitNum, games: [] }
                       acc[key].games.push(game)
                       return acc
@@ -4658,7 +4658,7 @@ export default function LeagueDetailPage() {
                   </Select>
                   <Input
                     type="number"
-                    min="1"
+                    min="0"
                     placeholder="Number"
                     className="w-24"
                     value={gameEditForm.game_unit}
