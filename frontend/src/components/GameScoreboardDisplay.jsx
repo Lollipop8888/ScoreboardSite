@@ -492,91 +492,53 @@ export function GameScoreboardDisplay({
         </div>
       )}
       
-      {/* FIELD GOAL Celebration Overlay - covers center area only, not logos */}
-      {scoreCelebration?.type === 'fieldgoal' && (
-        <div 
-          className="absolute left-[15%] right-[15%] top-12 bottom-[140px] flex items-center justify-center rounded-2xl z-20 animate-bounce-in overflow-hidden"
-          style={{
-            background: `linear-gradient(145deg, ${
-              scoreCelebration.team === 'home' ? homeTeam.color : awayTeam.color
-            } 0%, ${
-              scoreCelebration.team === 'home' ? (homeTeam.color2 || homeTeam.color) : (awayTeam.color2 || awayTeam.color)
-            } 50%, ${
-              scoreCelebration.team === 'home' ? (homeTeam.color3 || homeTeam.color) : (awayTeam.color3 || awayTeam.color)
-            } 100%)`,
-            boxShadow: `inset 0 0 80px rgba(255,255,255,0.2), 0 0 50px ${scoreCelebration.team === 'home' ? homeTeam.color : awayTeam.color}70, 0 8px 32px rgba(0,0,0,0.3)`
-          }}
-        >
-          {/* Animated shimmer overlay */}
+      {/* FIELD GOAL Celebration Overlay - full scoreboard like the TD overlay, compact so it fits any size */}
+      {scoreCelebration?.type === 'fieldgoal' && (() => {
+        const team = scoreCelebration.team === 'home' ? homeTeam : awayTeam
+        return (
           <div 
-            className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"
-            style={{ backgroundSize: '200% 100%' }}
-          />
-          {/* Radial glow effect */}
-          <div 
-            className="absolute inset-0 opacity-50"
+            className="absolute inset-0 flex items-center justify-center rounded-lg z-20 animate-bounce-in overflow-hidden"
             style={{
-              background: `radial-gradient(circle at center, rgba(255,255,255,0.4) 0%, transparent 70%)`
+              background: `linear-gradient(145deg, ${team.color} 0%, ${team.color2 || team.color} 55%, ${team.color3 || team.color} 100%)`,
+              boxShadow: `inset 0 0 80px rgba(255,255,255,0.15), 0 0 40px ${team.color}70`
             }}
-          />
-          {/* Goal post uprights effect */}
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 flex gap-8">
-            <div className="w-1.5 h-8 bg-yellow-400/60 rounded-b-full shadow-lg" style={{ boxShadow: '0 0 10px rgba(250,204,21,0.5)' }} />
-            <div className="w-1.5 h-8 bg-yellow-400/60 rounded-b-full shadow-lg" style={{ boxShadow: '0 0 10px rgba(250,204,21,0.5)' }} />
-          </div>
-          <div className="text-center px-4 py-3 relative z-10">
-            {/* Football going through uprights animation */}
-            <div className="relative mb-2">
-              <div className="text-4xl animate-bounce drop-shadow-lg" style={{ animation: 'bounce 0.6s ease-in-out infinite' }}>🏈</div>
-              <div className="absolute -top-1 left-1/2 -translate-x-1/2 text-2xl opacity-80" style={{ animation: 'pulse 1s ease-in-out infinite' }}>✨</div>
-            </div>
-            <p 
-              className="text-3xl font-black text-white tracking-wider mb-1 drop-shadow-lg uppercase"
-              style={{
-                textShadow: '0 0 20px rgba(255,255,255,0.8), 0 0 40px rgba(255,255,255,0.4), 0 4px 8px rgba(0,0,0,0.5)',
-                animation: 'pulse 1.5s ease-in-out infinite'
-              }}
-            >
-              It's Good!
-            </p>
-            <div className="flex items-center justify-center gap-2 mb-1">
-              {scoreCelebration.team === 'home' ? (
-                homeTeam.logo_url ? (
-                  <img src={homeTeam.logo_url} alt="" className="h-8 w-auto max-w-12 object-contain drop-shadow-lg" />
-                ) : (
-                  <span className="text-lg font-bold text-white" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
-                    {homeTeam.abbreviation}
+          >
+            <div 
+              className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer"
+              style={{ backgroundSize: '200% 100%' }}
+            />
+            <div className="relative z-10 flex items-center gap-5 px-6">
+              {/* Goalpost with the ball sailing through */}
+              <div className="relative w-16 h-20 shrink-0" aria-hidden="true">
+                <div className="absolute left-1 top-0 bottom-6 w-1.5 rounded-full bg-yellow-300 animate-fg-uprights-glow" />
+                <div className="absolute right-1 top-0 bottom-6 w-1.5 rounded-full bg-yellow-300 animate-fg-uprights-glow" />
+                <div className="absolute left-1 right-1 bottom-6 h-1.5 rounded-full bg-yellow-300" />
+                <div className="absolute left-1/2 -translate-x-1/2 bottom-0 w-1.5 h-6 rounded-full bg-yellow-300" />
+                <div className="absolute left-1/2 bottom-0 text-2xl animate-fg-ball-through">🏈</div>
+              </div>
+              <div className="text-center min-w-0">
+                <p 
+                  className="text-4xl font-black text-white tracking-wider uppercase leading-none animate-result-stamp"
+                  style={{ textShadow: '0 0 20px rgba(255,255,255,0.7), 0 4px 8px rgba(0,0,0,0.5)' }}
+                >
+                  It's Good!
+                </p>
+                <div className="flex items-center justify-center gap-2 mt-2">
+                  {team.logo_url ? (
+                    <img src={team.logo_url} alt="" className="h-7 w-auto max-w-10 object-contain drop-shadow-lg" />
+                  ) : null}
+                  <span className="text-lg font-bold text-white truncate" style={{ textShadow: '1px 1px 3px rgba(0,0,0,0.5)' }}>
+                    {team.name}
                   </span>
-                )
-              ) : (
-                awayTeam.logo_url ? (
-                  <img src={awayTeam.logo_url} alt="" className="h-8 w-auto max-w-12 object-contain drop-shadow-lg" />
-                ) : (
-                  <span className="text-lg font-bold text-white" style={{ textShadow: '2px 2px 4px rgba(0,0,0,0.5)' }}>
-                    {awayTeam.abbreviation}
-                  </span>
-                )
-              )}
-              <span className="text-lg font-bold text-white drop-shadow-lg">
-                {scoreCelebration.team === 'home' ? homeTeam.name : awayTeam.name}
-              </span>
+                </div>
+                <p className="text-base font-bold text-white/90 mt-1 drop-shadow">
+                  {scoreCelebration.distance ? `${scoreCelebration.distance} YD FIELD GOAL · ` : ''}+{scoreCelebration.points || 3}
+                </p>
+              </div>
             </div>
-            {scoreCelebration.distance && (
-              <p className="text-xl text-white font-black drop-shadow-lg" style={{ textShadow: '0 0 10px rgba(255,255,255,0.5)' }}>
-                {scoreCelebration.distance} YARD FIELD GOAL
-              </p>
-            )}
-            <p className="text-base text-white/90 font-bold mt-1 drop-shadow">+3 points</p>
           </div>
-          {/* Floating celebration elements */}
-          <div className="absolute top-2 left-3 text-xl animate-bounce drop-shadow-lg">🎉</div>
-          <div className="absolute top-3 right-4 text-lg animate-bounce drop-shadow-lg" style={{ animationDelay: '0.1s' }}>✨</div>
-          <div className="absolute bottom-2 left-4 text-lg animate-bounce drop-shadow-lg" style={{ animationDelay: '0.2s' }}>⭐</div>
-          <div className="absolute bottom-3 right-3 text-xl animate-bounce drop-shadow-lg" style={{ animationDelay: '0.15s' }}>🎊</div>
-          <div className="absolute top-1/2 left-1 text-sm animate-pulse drop-shadow-lg" style={{ animationDelay: '0.25s' }}>✨</div>
-          <div className="absolute top-1/2 right-1 text-sm animate-pulse drop-shadow-lg" style={{ animationDelay: '0.3s' }}>✨</div>
-        </div>
-      )}
+        )
+      })()}
       
       {/* SAFETY Celebration Overlay */}
       {scoreCelebration?.type === 'safety' && (
@@ -1048,7 +1010,7 @@ export function GameScoreboardDisplay({
         )}
         
         {/* FG Attempt Overlay */}
-        {showFGAttempt && (
+        {showFGAttempt && scoreCelebration?.type !== 'fieldgoal' && (
           <div className={`rounded-xl flex items-center justify-center gap-3 py-3 px-5 relative overflow-hidden ring-2 ${
             fgResult === 'good' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_40px_rgba(34,197,94,0.7)] animate-glow-pulse' :
             fgResult === 'doink' ? 'bg-gradient-to-r from-pink-600 via-pink-500 to-pink-600 ring-pink-400 shadow-[0_0_40px_rgba(236,72,153,0.7)] animate-fg-no-good-shake' :

@@ -1206,8 +1206,9 @@ export default function LiveGamePage({ standalone = false }) {
         setScoreCelebration(null)
       }, 5000)
     } else if (delta === 3 || delta === 4) {
-      // Field Goal (3 or 4 points) - show celebration first, then update score after animation
-      setScoreCelebration({ type: 'fieldgoal', team, points: delta, ...celebrationData })
+      // Field Goal (3 or 4 points) - let the FG bar's "GOOD!" stamp show first, then the
+      // celebration (which replaces the bar), then update the score after the animation
+      setTimeout(() => setScoreCelebration({ type: 'fieldgoal', team, points: delta, ...celebrationData }), 1200)
       setTimeout(async () => {
         await updateGame({ [field]: newScore })
         setScoreCelebration(null)
@@ -6678,7 +6679,8 @@ export default function LiveGamePage({ standalone = false }) {
                         setFgResult('good')
                         const scoringTeam = possession || 'home'
                         const distance = fgDistance
-                        updateScore(scoringTeam, 3, { distance })
+                        const points = game.four_point_fg_enabled && fgDistance >= (game.four_point_fg_distance || 50) ? 4 : 3
+                        updateScore(scoringTeam, points, { distance })
                         // Close the FG attempt panel after celebration
                         setTimeout(() => {
                           setShowFGAttempt(false)
