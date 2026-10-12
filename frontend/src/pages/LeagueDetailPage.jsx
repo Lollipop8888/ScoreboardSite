@@ -86,6 +86,8 @@ export default function LeagueDetailPage() {
   const [brackets, setBrackets] = useState([])
   const [loading, setLoading] = useState(true)
   const [gamesFilter, setGamesFilter] = useState('scheduled') // 'scheduled', 'current', 'completed'
+  // Season shown on the Games tab: null follows the current season, 'all' shows every season
+  const [gamesSeasonId, setGamesSeasonId] = useState(null)
   
   // Dialog states
   const [teamDialogOpen, setTeamDialogOpen] = useState(false)
@@ -682,6 +684,10 @@ export default function LeagueDetailPage() {
       setInviteError(e.message || 'Failed to send invite')
     }
   }
+
+  // Games tab: only the selected season's games (defaults to the current season)
+  const effectiveGamesSeasonId = gamesSeasonId ?? currentSeason?.id ?? 'all'
+  const seasonGames = effectiveGamesSeasonId === 'all' ? games : games.filter(g => g.season_id === effectiveGamesSeasonId)
 
   if (loading) {
     return (
@@ -1645,7 +1651,7 @@ export default function LeagueDetailPage() {
                       : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                   }`}
                 >
-                  Scheduled ({games.filter(g => g.status === 'scheduled').length})
+                  Scheduled ({seasonGames.filter(g => g.status === 'scheduled').length})
                 </button>
                 <button
                   onClick={() => setGamesFilter('current')}
@@ -1655,7 +1661,7 @@ export default function LeagueDetailPage() {
                       : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                   }`}
                 >
-                  Live ({games.filter(g => g.status === 'live').length})
+                  Live ({seasonGames.filter(g => g.status === 'live').length})
                 </button>
                 <button
                   onClick={() => setGamesFilter('completed')}
@@ -1665,8 +1671,25 @@ export default function LeagueDetailPage() {
                       : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                   }`}
                 >
-                  Completed ({games.filter(g => g.status === 'final' || g.quarter === 'Final').length})
+                  Completed ({seasonGames.filter(g => g.status === 'final' || g.quarter === 'Final').length})
                 </button>
+                {seasons.length > 0 && (
+                  <div className="ml-auto">
+                    <Select value={effectiveGamesSeasonId} onValueChange={setGamesSeasonId}>
+                      <SelectTrigger className="h-9 w-60">
+                        <SelectValue placeholder="Season" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {seasons.map(season => (
+                          <SelectItem key={season.id} value={season.id}>
+                            {season.name}{season.is_current ? ' (current)' : ''}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="all">All seasons</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               {/* Current Week Indicator */}
@@ -1675,8 +1698,8 @@ export default function LeagueDetailPage() {
                 const hasUnitLabel = league.game_unit_label || league.game_unit_label_2 || league.game_unit_label_3
                 if (!hasUnitLabel) return null
                 
-                const liveGames = games.filter(g => g.status === 'live')
-                const scheduledGames = games.filter(g => g.status === 'scheduled').sort((a, b) => {
+                const liveGames = seasonGames.filter(g => g.status === 'live')
+                const scheduledGames = seasonGames.filter(g => g.status === 'scheduled').sort((a, b) => {
                   if (!a.scheduled_at) return 1
                   if (!b.scheduled_at) return -1
                   return new Date(a.scheduled_at) - new Date(b.scheduled_at)
@@ -1720,7 +1743,7 @@ export default function LeagueDetailPage() {
               })()}
 
               {(() => {
-                const filteredGames = games.filter(game => {
+                const filteredGames = seasonGames.filter(game => {
                   if (gamesFilter === 'scheduled') return game.status === 'scheduled'
                   if (gamesFilter === 'current') return game.status === 'live'
                   if (gamesFilter === 'completed') return game.status === 'final' || game.quarter === 'Final'
@@ -1772,7 +1795,7 @@ export default function LeagueDetailPage() {
                     }, {})
                   : null
 
-                if (games.length === 0) {
+                if (seasonGames.length === 0) {
                   return (
                     <div className="text-center py-12">
                       <Calendar className="mx-auto h-12 w-12 text-slate-300 mb-4" />

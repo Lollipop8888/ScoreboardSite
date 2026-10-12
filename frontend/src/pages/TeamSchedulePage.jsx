@@ -29,6 +29,9 @@ export default function TeamSchedulePage() {
   const [games, setGames] = useState([])
   const [brackets, setBrackets] = useState([])
   const [linkedBrackets, setLinkedBrackets] = useState([])
+  const [seasons, setSeasons] = useState([])
+  // Season shown: null follows the current season, 'all' shows every season
+  const [scheduleSeasonId, setScheduleSeasonId] = useState(null)
   const [loading, setLoading] = useState(true)
   
   // Dialog states
@@ -48,14 +51,16 @@ export default function TeamSchedulePage() {
   async function loadData() {
     try {
       setLoading(true)
-      const [leagueData, teamsData, gamesData, bracketsData] = await Promise.all([
+      const [leagueData, teamsData, gamesData, bracketsData, seasonsData] = await Promise.all([
         leagueApi.get(leagueId),
         leagueApi.get(leagueId).then(l => l.teams),
         fetch(`/api/leagues/${leagueId}/games`).then(r => r.json()),
-        fetch(`/api/leagues/${leagueId}/brackets`).then(r => r.json())
+        fetch(`/api/leagues/${leagueId}/brackets`).then(r => r.json()),
+        leagueApi.getSeasons(leagueId).catch(() => [])
       ])
       
       setLeague(leagueData)
+      setSeasons(seasonsData || [])
       setAllTeams(teamsData)
       const currentTeam = teamsData.find(t => t.id === teamId)
       setTeam(currentTeam)
@@ -181,7 +186,22 @@ export default function TeamSchedulePage() {
     })
   }
 
-  const scheduledGames = getAllScheduledGames()
+  const currentSeason = seasons.find(s => s.is_current)
+  const effectiveSeasonId = scheduleSeasonId ?? currentSeason?.id ?? 'all'
+  const scheduledGames = getAllScheduledGames().filter(g => effectiveSeasonId === 'all' || g.season_id === effectiveSeasonId)
+
+  // Record for the selected season from its final games. Preseason games aren't part of the record.
+  const record = scheduledGames.reduce((r, g) => {
+    if (g.status !== 'final' || g.game_unit_type === 3) return r
+    const isHome = g.home_team?.id === teamId
+    const scored = isHome ? g.home_score : g.away_score
+    const allowed = isHome ? g.away_score : g.home_score
+    if (scored > allowed) r.wins += 1
+    else if (scored < allowed) r.losses += 1
+    else r.ties += 1
+    return r
+  }, { wins: 0, losses: 0, ties: 0 })
+  const viewingCurrentSeason = currentSeason && effectiveSeasonId === currentSeason.id
   const otherTeams = league?.teams?.filter(t => t.id !== teamId) || []
   const unlinkedBrackets = brackets.filter(b => !linkedBrackets.includes(b.id))
 
@@ -241,30 +261,30 @@ export default function TeamSchedulePage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-6">
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-600">{team.wins}</p>
+                <p className="text-2xl font-bold text-green-600">{record.wins}</p>
                 <p className="text-xs text-slate-500">Wins</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-red-600">{team.losses}</p>
+                <p className="text-2xl font-bold text-red-600">{record.losses}</p>
                 <p className="text-xs text-slate-500">Losses</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-slate-600 dark:text-slate-400">{team.ties}</p>
+                <p className="text-2xl font-bold text-slate-600 dark:text-slate-400">{record.ties}</p>
                 <p className="text-xs text-slate-500">Ties</p>
               </div>
               <div className="text-center border-l pl-6 ml-2">
                 <p className="text-2xl font-bold text-blue-600">
                   {(() => {
-                    const totalGames = (team.wins || 0) + (team.losses || 0) + (team.ties || 0)
+                    const totalGames = record.wins + record.losses + record.ties
                     if (totalGames === 0) return '—'
-                    const winPct = ((team.wins || 0) + (team.ties || 0) * 0.5) / totalGames
+                    const winPct = (record.wins + record.ties * 0.5) / totalGames
                     return (winPct * 100).toFixed(0) + '%'
                   })()}
                 </p>
                 <p className="text-xs text-slate-500">Win %</p>
               </div>
               {/* Division/Group 2 Ranking */}
-              {team.group_1 && team.group_2 && (
+              {team.group_1 && team.group_2 && (viewingCurrentSeason || seasons.length === 0) && (
                 <div className="text-center border-l pl-6 ml-2">
                   <p className="text-2xl font-bold text-purple-600">
                     {(() => {
@@ -341,6 +361,23 @@ export default function TeamSchedulePage() {
           <CardDescription>
             {scheduledGames.length} game{scheduledGames.length !== 1 ? 's' : ''} scheduled
           </CardDescription>
+          {seasons.length > 0 && (
+            <div className="pt-2">
+              <Select value={effectiveSeasonId} onValueChange={setScheduleSeasonId}>
+                <SelectTrigger className="h-9 w-60">
+                  <SelectValue placeholder="Season" />
+                </SelectTrigger>
+                <SelectContent>
+                  {seasons.map(season => (
+                    <SelectItem key={season.id} value={season.id}>
+                      {season.name}{season.is_current ? ' (current)' : ''}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="all">All seasons</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           {scheduledGames.length === 0 ? (
