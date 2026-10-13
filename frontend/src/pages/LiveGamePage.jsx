@@ -88,6 +88,21 @@ const NFL_PENALTIES = [
   { name: 'Other', yards: 0, category: 'Other' },
 ]
 
+// Small X in the top-left corner of an Immediate Actions box that has no other way out
+function BoxClose({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Close"
+      title="Close"
+      className="absolute top-2.5 left-2 h-5 w-5 flex items-center justify-center rounded-full text-xs text-slate-500 hover:text-slate-900 hover:bg-black/10 dark:text-slate-400 dark:hover:text-white dark:hover:bg-white/10"
+    >
+      ✕
+    </button>
+  )
+}
+
 // Stats that can be shown on the scoreboard, each with its own toggle
 const DISPLAY_STAT_BUTTONS = [
   { key: 'quarterScores', label: 'Qtr Scores', activeClass: 'bg-purple-600' },
@@ -235,6 +250,9 @@ export default function LiveGamePage({ standalone = false }) {
   const [showOTEndPrompt, setShowOTEndPrompt] = useState(false)
   // Overtime rules panel on the scoreboard: shown when OT starts, hidden when the clock starts
   const [showOTRules, setShowOTRules] = useState(false)
+  // Immediate Actions boxes closed with their X; they come back when the situation changes
+  const [dismissedBoxes, setDismissedBoxes] = useState([])
+  const dismissBox = (id) => setDismissedBoxes(prev => [...prev, id])
   
   // Go for it on 4th down - hides the 4th down options
   const [goingForIt, setGoingForIt] = useState(false)
@@ -931,6 +949,9 @@ export default function LiveGamePage({ standalone = false }) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [game, timerRunning, awayTimeouts, homeTimeouts, possession, playClockRunning, playClock, down, showPATAttempt, showFGAttempt, showInjury, keybindsEnabled])
 
+  // Closed Immediate Actions boxes reappear on the next down, possession, quarter or status change
+  useEffect(() => { setDismissedBoxes([]) }, [down, possession, game?.quarter, gameStatus])
+
   // The game clock tick runs from a timeout chain, so it reads possession from a ref
   const possessionRef = useRef(possession)
   useEffect(() => { possessionRef.current = possession }, [possession])
@@ -1495,8 +1516,11 @@ export default function LiveGamePage({ standalone = false }) {
   }
 
   // Helper to finalize game and sync bracket
-  async function finalizeGame() {
-    await updateGame({ quarter: 'Final', status: 'final' })
+  // End the game. `scores` lets Quick Finish set the final score at the same time.
+  async function finalizeGame(scores = {}) {
+    const homeScore = scores.home_score ?? game.home_score
+    const awayScore = scores.away_score ?? game.away_score
+    await updateGame({ ...scores, quarter: 'Final', status: 'final' })
     setGameStatus('final')
     setPossession(null)
     setHideDownDistance(true)
@@ -1506,15 +1530,15 @@ export default function LiveGamePage({ standalone = false }) {
     if (linkedBracketMatch) {
       try {
         let winner_id = null
-        if (game.home_score > game.away_score) {
+        if (homeScore > awayScore) {
           winner_id = game.home_team?.id
-        } else if (game.away_score > game.home_score) {
+        } else if (awayScore > homeScore) {
           winner_id = game.away_team?.id
         }
 
         await bracketApi.updateMatch(linkedBracketMatch.id, {
-          team1_score: game.home_score,
-          team2_score: game.away_score,
+          team1_score: homeScore,
+          team2_score: awayScore,
           status: 'completed',
           winner_id,
         })
@@ -1526,34 +1550,7 @@ export default function LiveGamePage({ standalone = false }) {
       }
     }
     
-    // Update team records (only for league games)
-    if (!standalone && game.home_team?.id && game.away_team?.id && originalRecords.home && originalRecords.away) {
-      try {
-        const homeWon = game.home_score > game.away_score
-        const awayWon = game.away_score > game.home_score
-        const tied = game.home_score === game.away_score
-        
-        await teamApi.update(game.home_team.id, {
-          wins: originalRecords.home.wins + (homeWon ? 1 : 0),
-          losses: originalRecords.home.losses + (awayWon ? 1 : 0),
-          ties: (originalRecords.home.ties || 0) + (tied ? 1 : 0),
-          points_for: (originalRecords.home.points_for || 0) + game.home_score,
-          points_against: (originalRecords.home.points_against || 0) + game.away_score,
-        })
-        
-        await teamApi.update(game.away_team.id, {
-          wins: originalRecords.away.wins + (awayWon ? 1 : 0),
-          losses: originalRecords.away.losses + (homeWon ? 1 : 0),
-          ties: (originalRecords.away.ties || 0) + (tied ? 1 : 0),
-          points_for: (originalRecords.away.points_for || 0) + game.away_score,
-          points_against: (originalRecords.away.points_against || 0) + game.home_score,
-        })
-        
-        console.log('Team records updated in database')
-      } catch (err) {
-        console.error('Failed to update team records:', err)
-      }
-    }
+    // Team W/L and standings are rebuilt on the server from final scores when the game goes final
   }
 
   // Quarter change functions
@@ -2468,6 +2465,14 @@ export default function LiveGamePage({ standalone = false }) {
   function setFlagDeclined(penaltyIndex = null) {
     setFlagResult('declined')
     setDeclinedPenaltyIndex(penaltyIndex)
+    // Declining one of several penalties: the others were accepted, so they count
+    if (penaltyIndex !== null && displayedPenalties.length > 1) {
+      displayedPenalties.forEach((dp, i) => {
+        if (i === penaltyIndex || (dp.team !== 'home' && dp.team !== 'away')) return
+        addGameLogEntry('penalty', `${dp.name}${dp.yards ? ` - ${dp.yards} yds` : ''}`, dp.team)
+        setQuickStats(s => ({ ...s, [dp.team]: { ...s[dp.team], penalties: (s[dp.team].penalties || 0) + 1, penaltyYards: (s[dp.team].penaltyYards || 0) + (dp.yards || 0) } }))
+      })
+    }
     if (penaltyIndex !== null && displayedPenalties[penaltyIndex]) {
       setNoTeamFlagText(`PENALTY DECLINED: ${displayedPenalties[penaltyIndex].name}`)
     } else {
@@ -4305,8 +4310,9 @@ export default function LiveGamePage({ standalone = false }) {
               )
             })()}
             {/* Coin Toss - Pregame or OT */}
-            {(game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && !coinToss.winner && (
-              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+            {!dismissedBoxes.includes('coinToss') && (game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && !coinToss.winner && (
+              <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => dismissBox('coinToss')} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">🪙 Coin Toss</p>
                 <div className="space-y-2">
                   <p className="text-xs text-amber-700 dark:text-amber-400">Who won the toss?</p>
@@ -4333,8 +4339,9 @@ export default function LiveGamePage({ standalone = false }) {
             )}
 
             {/* Coin Toss Choice - After winner selected */}
-            {(game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && coinToss.winner && !coinToss.choice && (
-              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+            {!dismissedBoxes.includes('coinToss') && (game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && coinToss.winner && !coinToss.choice && (
+              <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => dismissBox('coinToss')} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                   🪙 {coinToss.winner === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation} won - Election?
                 </p>
@@ -4417,8 +4424,9 @@ export default function LiveGamePage({ standalone = false }) {
             )}
 
             {/* Start Game - Pregame only */}
-            {(game.quarter === 'Pregame' || gameStatus === 'pregame') && (
-              <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg space-y-2">
+            {!dismissedBoxes.includes('startGame') && (game.quarter === 'Pregame' || gameStatus === 'pregame') && (
+              <div className="relative pl-8 p-3 bg-green-100 dark:bg-green-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => dismissBox('startGame')} />
                 <p className="text-sm font-semibold text-green-800 dark:text-green-300">Ready to start?</p>
                 <Button 
                   className="w-full bg-green-600 hover:bg-green-700"
@@ -4785,7 +4793,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* PAT/2PT Result */}
             {showPATAttempt && !patResult && (
-              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setShowPATAttempt(null); setPatResult(null) }} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                   {showPATAttempt === 'pat' ? 'PAT Attempt' : '2PT Conversion'}
                 </p>
@@ -4930,7 +4939,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* Field Goal Result */}
             {showFGAttempt && !fgResult && (
-              <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setShowFGAttempt(false); setFgResult(null) }} />
                 <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">
                   Field Goal Attempt ({fgDistance} yards)
                   {game.four_point_fg_enabled && fgDistance >= (game.four_point_fg_distance || 50) && (
@@ -5094,7 +5104,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* Turnover Review Option */}
             {pendingTurnoverReview && pendingTurnoverReview !== 'fumble' && (
-              <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setPendingTurnoverReview(null); setShowTurnover(null) }} />
                 <p className="text-sm font-semibold text-red-800 dark:text-red-300">
                   {pendingTurnoverReview === 'downs' ? 'Turnover on Downs' : 'Interception'} - Review?
                 </p>
@@ -5200,7 +5211,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* Fumble Review/Recovery Options */}
             {pendingTurnoverReview === 'fumble' && (
-              <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setPendingTurnoverReview(null); setShowTurnover(null) }} />
                 <p className="text-sm font-semibold text-red-800 dark:text-red-300">Fumble - Review or Recovery?</p>
                 <div className="grid grid-cols-3 gap-2 mb-2">
                   <Button 
@@ -5268,7 +5280,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* Fumble Recovery Options */}
             {pendingFumble && (
-              <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setPendingFumble(false); setShowTurnover(null) }} />
                 <p className="text-sm font-semibold text-red-800 dark:text-red-300">Fumble - Who Recovers?</p>
                 <div className="grid grid-cols-3 gap-2">
                   <Button 
@@ -5460,7 +5473,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* End of Quarter Actions */}
             {gameStatus === 'end-quarter' && game.quarter !== 'Q4' && game.quarter !== 'OT' && !game.quarter?.startsWith('OT') && game.game_time === '0:00' && (
-              <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setGameStatus(null) }} />
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">End of {game.quarter}</p>
                 <Button 
                   className="w-full bg-green-600 hover:bg-green-700"
@@ -5498,7 +5512,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* End of Q4 - Not Tied */}
             {gameStatus === 'end-quarter' && game.quarter === 'Q4' && game.home_score !== game.away_score && game.game_time === '0:00' && (
-              <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setGameStatus(null) }} />
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">End of Q4</p>
                 <div className="grid grid-cols-2 gap-2">
                   <Button 
@@ -5529,7 +5544,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* End of OT */}
             {gameStatus === 'end-quarter' && (game.quarter === 'OT' || game.quarter?.startsWith('OT')) && game.game_time === '0:00' && (
-              <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setGameStatus(null) }} />
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                   End of {game.quarter} {game.home_score === game.away_score ? '- Still Tied' : ''}
                 </p>
@@ -5577,7 +5593,8 @@ export default function LiveGamePage({ standalone = false }) {
             
             {/* End of Q4 Tied - OT or End */}
             {gameStatus === 'end-quarter' && game.quarter === 'Q4' && game.home_score === game.away_score && game.game_time === '0:00' && (
-              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+              <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => { setGameStatus(null) }} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">End of Regulation - Tied Game</p>
                 <div className="grid grid-cols-2 gap-2 mb-2">
                   <Button 
@@ -5639,8 +5656,9 @@ export default function LiveGamePage({ standalone = false }) {
             )}
             
             {/* Pregame Countdown Timer */}
-            {game.quarter === 'Pregame' && countdown && (
-              <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+            {!dismissedBoxes.includes('countdown') && game.quarter === 'Pregame' && countdown && (
+              <div className="relative pl-8 p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                <BoxClose onClick={() => dismissBox('countdown')} />
                 <p className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-2">
                   {countdown.passed ? '⏰ Scheduled kickoff time passed!' : '⏱️ Time until kickoff:'}
                 </p>
@@ -5663,8 +5681,9 @@ export default function LiveGamePage({ standalone = false }) {
             )}
             
             {/* Kickoff Receiver Selection - shows at start of game, Q3, and OT */}
-            {(game.quarter === 'Pregame' || gameStatus === 'halftime-show' || (game.quarter === 'Q4' && game.home_score === game.away_score && gameStatus === 'end-quarter')) && (
-              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+            {!dismissedBoxes.includes('kickoffReceiver') && (game.quarter === 'Pregame' || gameStatus === 'halftime-show' || (game.quarter === 'Q4' && game.home_score === game.away_score && gameStatus === 'end-quarter')) && (
+              <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                <BoxClose onClick={() => dismissBox('kickoffReceiver')} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">Who receives the kickoff?</p>
                 <div className="grid grid-cols-2 gap-2">
                   <Button 
@@ -5729,11 +5748,12 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
             )}
             
-            {/* Kickoff options - Touchback, Return, OOB, Penalty, Short Free Kick */}
+            {/* Kickoff options - base results only (penalties go through the FLAG button) */}
             {gameStatus === 'kickoff' && (
-              <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+              <div className="relative pl-8 p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                <BoxClose onClick={() => { setGameStatus(null); setShowKickoffChoice(false) }} />
                 <p className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-2">Kickoff Result</p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <Button 
                     className="bg-blue-600 hover:bg-blue-700"
                     onClick={() => {
@@ -5790,78 +5810,14 @@ export default function LiveGamePage({ standalone = false }) {
                   >
                     📍 Out of Bounds
                   </Button>
-                  <Button 
-                    className="bg-yellow-500 hover:bg-yellow-600 text-black"
-                    onClick={() => {
-                      setGameStatus(null)
-                      stopTimer()
-                      setShowKickoffChoice(false)
-                      setKickoffReceiver(null)
-                      showFlagStage1()
-                    }}
-                  >
-                    🚩 Penalty
-                  </Button>
-                  <Button 
-                    className="bg-orange-500 hover:bg-orange-600 text-white"
-                    onClick={() => {
-                      setGameStatus(null)
-                      stopTimer()
-                      setShowKickoffChoice(false)
-                      setKickoffReceiver(null)
-                      // Open penalty panel with "Short Free Kick" pre-filled
-                      setPenaltySearch('Short Free Kick')
-                      showFlagStage1()
-                    }}
-                  >
-                    🚩 Short Free Kick
-                  </Button>
-                  <Button 
-                    className="bg-gray-600 hover:bg-gray-700"
-                    onClick={() => {
-                      setGameStatus(null)
-                      stopTimer()
-                      setShowKickoffChoice(false)
-                      setKickoffReceiver(null)
-                    }}
-                  >
-                    ⚫ Dead Ball
-                  </Button>
-                  <Button 
-                    className="bg-red-600 hover:bg-red-700"
-                    onClick={() => {
-                      // Fumble on kickoff return - show fumble recovery options
-                      setGameStatus(null)
-                      stopTimer()
-                      setShowKickoffChoice(false)
-                      setPossession(kickoffReceiver) // Set initial possession to returner
-                      setKickoffReceiver(null)
-                      setPendingFumble(true) // Show fumble recovery panel
-                    }}
-                  >
-                    🏈💨 Fumble
-                  </Button>
-                  <Button 
-                    className="bg-pink-600 hover:bg-pink-700"
-                    onClick={() => {
-                      // Fumble returned for TD by kicking team
-                      const kickingTeam = kickoffReceiver === 'home' ? 'away' : 'home'
-                      setGameStatus(null)
-                      stopTimer()
-                      setShowKickoffChoice(false)
-                      setKickoffReceiver(null)
-                      setShowTDPanel(kickingTeam)
-                    }}
-                  >
-                    🏈 Fumble TD
-                  </Button>
                 </div>
               </div>
             )}
             
             {/* Onside Kick options - Recovered by kicking team or receiving team */}
             {gameStatus === 'onside-kick' && (
-              <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
+              <div className="relative pl-8 p-3 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
+                <BoxClose onClick={() => { setGameStatus(null) }} />
                 <p className="text-sm font-semibold text-orange-800 dark:text-orange-300 mb-2">Onside Kick Result</p>
                 <div className="grid grid-cols-2 gap-2">
                   <Button 
@@ -5912,9 +5868,10 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
             )}
             
-            {/* Punt options - Touchback, Fair Catch, Return, OOB, Penalty */}
+            {/* Punt options - base results only (penalties go through the FLAG button) */}
             {gameStatus === 'punt' && (
-              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+              <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                <BoxClose onClick={() => { setGameStatus(null) }} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">Punt Result</p>
                 <div className="grid grid-cols-3 gap-2">
                   <Button 
@@ -6003,78 +5960,6 @@ export default function LiveGamePage({ standalone = false }) {
                     📍 Out of Bounds
                   </Button>
                   <Button 
-                    className="bg-purple-600 hover:bg-purple-700"
-                    onClick={() => {
-                      // Faked punt - resume play
-                      setGameStatus(null)
-                    }}
-                  >
-                    🎭 Faked
-                  </Button>
-                  <Button 
-                    className="bg-orange-600 hover:bg-orange-700"
-                    onClick={() => {
-                      // Blocked punt - possession stays with punting team's opponent
-                      setGameStatus(null)
-                      stopTimer()
-                      togglePossession()
-                      setDown(1)
-                      setDistance(10)
-                    }}
-                  >
-                    🚫 Blocked
-                  </Button>
-                  <Button 
-                    className="bg-pink-600 hover:bg-pink-700"
-                    onClick={() => {
-                      // Blocked punt returned for TD
-                      const blockingTeam = possession === 'home' ? 'away' : 'home'
-                      setGameStatus(null)
-                      stopTimer()
-                      setShowTDPanel(blockingTeam)
-                    }}
-                  >
-                    🏈 Block TD
-                  </Button>
-                  <Button 
-                    className="bg-yellow-500 hover:bg-yellow-600 text-black"
-                    onClick={() => {
-                      setGameStatus(null)
-                      stopTimer()
-                      showFlagStage1()
-                    }}
-                  >
-                    🚩 Penalty
-                  </Button>
-                  <Button 
-                    className="bg-red-600 hover:bg-red-700"
-                    onClick={() => {
-                      setGameStatus(null)
-                      stopTimer()
-                      setPendingFumble(true)
-                    }}
-                  >
-                    🏈💨 Fumble
-                  </Button>
-                  <Button 
-                    className="bg-rose-500 hover:bg-rose-600"
-                    onClick={() => {
-                      // Muffed punt - punting team recovers, a lost fumble by the receiving team
-                      const receivingTeam = possession === 'home' ? 'away' : possession === 'away' ? 'home' : null
-                      if (receivingTeam) {
-                        setQuickStats(s => ({ ...s, [receivingTeam]: { ...s[receivingTeam], turnovers: (s[receivingTeam].turnovers || 0) + 1 } }))
-                        addGameLogEntry('turnover', 'Muffed punt - recovered by kicking team', receivingTeam)
-                      }
-                      setGameStatus(null)
-                      stopTimer()
-                      // Possession stays with punting team
-                      setDown(1)
-                      setDistance(10)
-                    }}
-                  >
-                    🙈 Muffed
-                  </Button>
-                  <Button 
                     className="bg-gray-600 hover:bg-gray-700"
                     onClick={() => {
                       setGameStatus(null)
@@ -6095,8 +5980,9 @@ export default function LiveGamePage({ standalone = false }) {
             )}
             
             {/* Quick Special Teams / Go For It - only on 4th down */}
-            {!kickoffPending && gameStatus !== 'kickoff' && gameStatus !== 'punt' && game.quarter !== 'Pregame' && gameStatus !== 'halftime-show' && !(game.quarter === 'Q4' && game.home_score === game.away_score && gameStatus === 'end-quarter') && !showFGAttempt && down === 4 && !goingForIt && (
-              <div className="grid grid-cols-4 gap-2">
+            {!dismissedBoxes.includes('specialTeams') && !kickoffPending && gameStatus !== 'kickoff' && gameStatus !== 'punt' && game.quarter !== 'Pregame' && gameStatus !== 'halftime-show' && !(game.quarter === 'Q4' && game.home_score === game.away_score && gameStatus === 'end-quarter') && !showFGAttempt && down === 4 && !goingForIt && (
+              <div className="relative pl-8 grid grid-cols-4 gap-2">
+                <BoxClose onClick={() => dismissBox('specialTeams')} />
                 <Button 
                   className="bg-amber-500 hover:bg-amber-600"
                   onClick={() => setGameStatus('punt')}
@@ -8933,21 +8819,8 @@ export default function LiveGamePage({ standalone = false }) {
             <Button 
               className="flex-1 bg-purple-600 hover:bg-purple-700"
               onClick={async () => {
-                // Set the scores
-                await api.update(gameId, { 
-                  home_score: quickFinishScores.home, 
-                  away_score: quickFinishScores.away,
-                  quarter: 'Final',
-                  status: 'completed'
-                })
-                // Update local state
-                setGame(g => ({ 
-                  ...g, 
-                  home_score: quickFinishScores.home, 
-                  away_score: quickFinishScores.away,
-                  quarter: 'Final',
-                  status: 'completed'
-                }))
+                // Same as a normal end of game: status final (counts in standings), bracket sync
+                await finalizeGame({ home_score: quickFinishScores.home, away_score: quickFinishScores.away })
                 stopTimer()
                 stopPlayClock()
                 setShowQuickFinish(false)
