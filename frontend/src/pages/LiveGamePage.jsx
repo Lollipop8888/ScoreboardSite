@@ -489,6 +489,8 @@ export default function LiveGamePage({ standalone = false }) {
           if (savedState.closeCall && !savedState.closeCall.result) setCloseCall(savedState.closeCall)
           if (savedState.scoreboardExtras) setScoreboardExtras(prev => ({ ...prev, ...savedState.scoreboardExtras }))
           if (savedState.scoringRun) setScoringRun(savedState.scoringRun)
+          // & Goal / & Inches (down and distance themselves come from the game row)
+          if (savedState.specialDistance) setSpecialDistance(savedState.specialDistance)
           if (savedState.currentDrive) {
             driveRef.current = savedState.currentDrive
             prevPossessionForDriveRef.current = savedState.currentDrive.team
@@ -2567,17 +2569,34 @@ export default function LiveGamePage({ standalone = false }) {
       firstDownUndoRef.current = null
     }
 
-    // Don't change anything if it's "&Goal" - half the distance to goal is handled manually
-    if (baseSpecialDistance !== 'goal' && sp) {
-      const penalty = sp.penalty
-      
-      if (penalty.autoFirst && !penaltyOnOffense) {
-        // Defensive penalty with auto first down
-        recordPlayResult('penaltyFirstDown')
-        setDown(1)
+    // A defensive foul with an automatic first down always gives one, from any of the selected
+    // penalties and even at & Goal (then it's 1st & Goal)
+    const isOnDefense = (p) => (p.team === 'home' || p.team === 'away') && p.team !== possession && (possession === 'home' || possession === 'away')
+    const autoFirstFoul = selectedPenalties.find(p => p.penalty.autoFirst && isOnDefense(p))
+    if (autoFirstFoul) {
+      recordPlayResult('penaltyFirstDown')
+      setDown(1)
+      const tracked = scoreboardExtras.showBallSpot && (possession === 'home' || possession === 'away')
+      const toGoal = tracked ? yardsToGoal(ballOn, possession) : null
+      if (baseSpecialDistance === 'goal') {
+        // Still goal to go; keep the distance unless the ball spot says otherwise
+        setDistance(toGoal ?? baseDistance)
+        setSpecialDistance('goal')
+      } else if (toGoal !== null && toGoal <= 10) {
+        setDistance(toGoal)
+        setSpecialDistance('goal')
+      } else {
         setDistance(10)
         setSpecialDistance(null)
-      } else if (penalty.lossOfDown && penaltyOnOffense) {
+      }
+    }
+
+    // Other penalties adjust the distance. Don't change anything if it's "&Goal" - half the distance
+    // to goal is handled manually
+    if (!autoFirstFoul && baseSpecialDistance !== 'goal' && sp) {
+      const penalty = sp.penalty
+      
+      if (penalty.lossOfDown && penaltyOnOffense) {
         // Offensive penalty with loss of down
         if (baseDown < 4) {
           setDown(baseDown + 1)
