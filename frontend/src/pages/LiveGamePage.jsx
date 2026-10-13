@@ -183,8 +183,6 @@ export default function LiveGamePage({ standalone = false }) {
   const [kickoffReceiver, setKickoffReceiver] = useState(null) // 'home' or 'away' - who receives kickoff
   const [showKickoffChoice, setShowKickoffChoice] = useState(false) // Show kickoff receiver selection
   const [teamRecords, setTeamRecords] = useState({ home: null, away: null }) // Team records from league
-  const [originalRecords, setOriginalRecords] = useState({ home: null, away: null }) // Original records before final display
-  const [recordsUpdatedForFinal, setRecordsUpdatedForFinal] = useState(false) // Track if display records were updated
   const [injuryTeam, setInjuryTeam] = useState(null) // 'home' or 'away' - team with injured player
   
   // Extra info box state - supports multiple lines with individual sizes and colors
@@ -252,6 +250,8 @@ export default function LiveGamePage({ standalone = false }) {
   const [showOTEndPrompt, setShowOTEndPrompt] = useState(false)
   // Overtime rules panel on the scoreboard: shown when OT starts, hidden when the clock starts
   const [showOTRules, setShowOTRules] = useState(false)
+  // Quarter in which the Overtime Rules box was closed with its X (it comes back next quarter)
+  const [otRulesBoxClosedFor, setOtRulesBoxClosedFor] = useState(null)
   // Scoreboard extras (settings in the Scoreboard Extras card)
   const [scoreboardExtras, setScoreboardExtras] = useState({
     showBallSpot: false,        // ball spot line + field strip under down & distance
@@ -591,61 +591,31 @@ export default function LiveGamePage({ standalone = false }) {
     }
   }, [game?.id]) // Only run when game ID changes (initial load)
 
-  // Fetch team records from league (only for league games)
+  // Team records on the scoreboard come from the server, which rebuilds W/L from final scores.
+  // Refetch on load and whenever this game becomes final, stops being final, or its final score
+  // changes (after a moment, so the server has rebuilt them). Adding the result locally double
+  // counted a game that was already final and counted preseason games.
+  const finalRecordKey = game?.status === 'final' ? `final:${game.home_score}-${game.away_score}` : 'open'
+  const recordsLoadedRef = useRef(false)
   useEffect(() => {
     if (!game || standalone) return
-    
+    let cancelled = false
     async function fetchTeamRecords() {
       try {
-        // Get teams from the league to get their records
         const teams = await teamApi.getByLeague(game.league_id)
+        if (cancelled) return
         const homeTeamData = teams.find(t => t.id === game.home_team?.id)
         const awayTeamData = teams.find(t => t.id === game.away_team?.id)
-        
-        setTeamRecords({
-          home: homeTeamData ? { wins: homeTeamData.wins, losses: homeTeamData.losses, ties: homeTeamData.ties, points_for: homeTeamData.points_for || 0, points_against: homeTeamData.points_against || 0 } : null,
-          away: awayTeamData ? { wins: awayTeamData.wins, losses: awayTeamData.losses, ties: awayTeamData.ties, points_for: awayTeamData.points_for || 0, points_against: awayTeamData.points_against || 0 } : null,
-        })
+        const record = (t) => t ? { wins: t.wins, losses: t.losses, ties: t.ties, points_for: t.points_for || 0, points_against: t.points_against || 0 } : null
+        setTeamRecords({ home: record(homeTeamData), away: record(awayTeamData) })
       } catch (err) {
         console.error('Failed to fetch team records:', err)
       }
     }
-    
-    fetchTeamRecords()
-  }, [game?.id, game?.league_id, standalone])
-
-  // Update display records when gameStatus changes to/from 'final'
-  useEffect(() => {
-    if (!game || standalone || !teamRecords.home || !teamRecords.away) return
-    
-    if (gameStatus === 'final' && !recordsUpdatedForFinal) {
-      // Save original records and update display records
-      setOriginalRecords({ ...teamRecords })
-      
-      // Calculate new display records based on game result
-      const homeWon = game.home_score > game.away_score
-      const awayWon = game.away_score > game.home_score
-      const tied = game.home_score === game.away_score
-      
-      setTeamRecords(prev => ({
-        home: {
-          wins: prev.home.wins + (homeWon ? 1 : 0),
-          losses: prev.home.losses + (awayWon ? 1 : 0),
-          ties: (prev.home.ties || 0) + (tied ? 1 : 0),
-        },
-        away: {
-          wins: prev.away.wins + (awayWon ? 1 : 0),
-          losses: prev.away.losses + (homeWon ? 1 : 0),
-          ties: (prev.away.ties || 0) + (tied ? 1 : 0),
-        },
-      }))
-      setRecordsUpdatedForFinal(true)
-    } else if (gameStatus !== 'final' && recordsUpdatedForFinal) {
-      // Revert to original records
-      setTeamRecords({ ...originalRecords })
-      setRecordsUpdatedForFinal(false)
-    }
-  }, [gameStatus, game?.home_score, game?.away_score, standalone])
+    const t = setTimeout(fetchTeamRecords, finalRecordKey === 'open' && !recordsLoadedRef.current ? 0 : 1500)
+    recordsLoadedRef.current = true
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [game?.id, game?.league_id, standalone, finalRecordKey])
 
   useEffect(() => {
     if (!game?.share_code) return
@@ -4669,10 +4639,11 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
             )}
             {/* Overtime Rules - available in Q4 (in case it ends tied) and during OT */}
-            {(game.quarter === 'Q4' || game.quarter?.startsWith('OT')) && (() => {
+            {(game.quarter === 'Q4' || game.quarter?.startsWith('OT')) && otRulesBoxClosedFor !== game.quarter && (() => {
               const rules = getOvertimeRules(game.ot_format, game.overtime_length)
               return (
-                <div className="p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg space-y-2">
+                <div className="relative pl-8 p-3 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg space-y-2">
+                  <BoxClose onClick={() => { setOtRulesBoxClosedFor(game.quarter); setShowOTRules(false) }} />
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-semibold text-indigo-800 dark:text-indigo-300">⏱️ Overtime Rules ({rules.title})</p>
                     <Button
