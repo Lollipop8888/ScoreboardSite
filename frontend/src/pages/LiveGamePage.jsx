@@ -952,6 +952,14 @@ export default function LiveGamePage({ standalone = false }) {
   // Closed Immediate Actions boxes reappear on the next down, possession, quarter or status change
   useEffect(() => { setDismissedBoxes([]) }, [down, possession, game?.quarter, gameStatus])
 
+  // Down & distance from before the last first down (see recordPlayResult / applyPenalty)
+  const firstDownUndoRef = useRef(null)
+  // When the current flag was thrown. A flag within FIRST_DOWN_FLAG_WINDOW_MS of a first down is on
+  // that same play (the next snap can't come that soon), so the penalty can wipe the first down out.
+  const flagThrownAtRef = useRef(null)
+  const FIRST_DOWN_FLAG_WINDOW_MS = 25000
+  useEffect(() => { firstDownUndoRef.current = null }, [possession])
+
   // The game clock tick runs from a timeout chain, so it reads possession from a ref
   const possessionRef = useRef(possession)
   useEffect(() => { possessionRef.current = possession }, [possession])
@@ -1902,6 +1910,8 @@ export default function LiveGamePage({ standalone = false }) {
     const team = possession
     if (team !== 'home' && team !== 'away') return
     const playDown = down
+    // Remember the down & distance before a first down, in case a penalty on the play takes it away
+    firstDownUndoRef.current = result === 'firstDown' ? { team, down: playDown, distance, specialDistance, at: Date.now() } : null
     // Game log: first downs (noting 3rd/4th down conversions), and anything given a description
     if (result === 'firstDown') {
       addGameLogEntry('down', playDown >= 3 ? `First down (${playDown === 3 ? '3rd' : '4th'} down conversion)` : 'First down', team)
@@ -2283,6 +2293,7 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Stage 1: Show just "FLAG" text on display
   function showFlagStage1() {
+    if (flagDisplayStage === 0) flagThrownAtRef.current = Date.now()
     setFlagDisplayStage(1)
     // Hide play clock when flag is thrown (but don't stop game clock)
     setShowPlayClock(false)
@@ -2326,13 +2337,43 @@ export default function LiveGamePage({ standalone = false }) {
     })
     
     // Update D&D based on penalty only when Apply is clicked
+    // For simplicity, use the first penalty if multiple
+    const sp = selectedPenalties[0]
+    const penaltyOnOffense = !!sp && ((sp.team === 'home' && possession === 'home') || 
+                                      (sp.team === 'away' && possession === 'away'))
+
+    // An offensive penalty on a play that gained a first down wipes it out: go back to the
+    // down & distance before the play, then apply the penalty from there
+    let baseDown = down
+    let baseDistance = distance
+    let baseSpecialDistance = specialDistance
+    const undo = firstDownUndoRef.current
+    const flagOnFirstDownPlay = undo && Math.abs((flagThrownAtRef.current ?? Date.now()) - undo.at) <= FIRST_DOWN_FLAG_WINDOW_MS
+    if (penaltyOnOffense && undo && undo.team === possession && down === 1 && flagOnFirstDownPlay) {
+      baseDown = undo.down
+      baseDistance = undo.distance
+      baseSpecialDistance = undo.specialDistance
+      setDown(baseDown)
+      setDistance(baseDistance)
+      setSpecialDistance(baseSpecialDistance)
+      // The first down (and any 3rd/4th down conversion) didn't happen
+      setQuickStats(s => {
+        const t = { ...s[undo.team] }
+        t.firstDowns = Math.max(0, (t.firstDowns || 0) - 1)
+        if (undo.down === 3 || undo.down === 4) {
+          const key = undo.down === 3 ? 'thirdDown' : 'fourthDown'
+          t[`${key}Att`] = Math.max(0, (t[`${key}Att`] || 0) - 1)
+          t[`${key}Conv`] = Math.max(0, (t[`${key}Conv`] || 0) - 1)
+        }
+        return { ...s, [undo.team]: t }
+      })
+      addGameLogEntry('down', 'First down wiped out by penalty', undo.team)
+      firstDownUndoRef.current = null
+    }
+
     // Don't change anything if it's "&Goal" - half the distance to goal is handled manually
-    if (specialDistance !== 'goal' && selectedPenalties.length > 0) {
-      // For simplicity, use the first penalty if multiple
-      const sp = selectedPenalties[0]
+    if (baseSpecialDistance !== 'goal' && sp) {
       const penalty = sp.penalty
-      const penaltyOnOffense = (sp.team === 'home' && possession === 'home') || 
-                               (sp.team === 'away' && possession === 'away')
       
       if (penalty.autoFirst && !penaltyOnOffense) {
         // Defensive penalty with auto first down
@@ -2342,22 +2383,23 @@ export default function LiveGamePage({ standalone = false }) {
         setSpecialDistance(null)
       } else if (penalty.lossOfDown && penaltyOnOffense) {
         // Offensive penalty with loss of down
-        if (down < 4) {
-          setDown(down + 1)
+        if (baseDown < 4) {
+          setDown(baseDown + 1)
           // Distance increases by penalty yards
-          const newDist = distance + penalty.yards
+          const newDist = baseDistance + penalty.yards
           setDistance(Math.min(newDist, 99))
         }
       } else if (penaltyOnOffense && penalty.yards > 0) {
         // Offensive penalty - add yards to distance (replay down)
-        const newDist = distance + penalty.yards
+        const newDist = baseDistance + penalty.yards
         setDistance(Math.min(newDist, 99))
         setSpecialDistance(null)
       } else if (!penaltyOnOffense && penalty.yards > 0) {
         // Defensive penalty - subtract yards from distance
         const newDist = distance - penalty.yards
         if (newDist <= 0) {
-          // Automatic first down
+          // Penalty yards reach the line to gain: first down
+          recordPlayResult('penaltyFirstDown')
           setDown(1)
           setDistance(10)
           setSpecialDistance(null)
@@ -2369,7 +2411,7 @@ export default function LiveGamePage({ standalone = false }) {
     
     // If we're on 4th down after penalty, reset goingForIt to show options again
     // (penalty on 4th down play means they get another chance to decide)
-    if (down === 4) {
+    if (baseDown === 4) {
       setGoingForIt(false)
     }
     
@@ -2384,6 +2426,7 @@ export default function LiveGamePage({ standalone = false }) {
 
   function hideFlagFromDisplay() {
     // Set all flag-related state to cleared values
+    flagThrownAtRef.current = null
     setFlagDisplayStage(0)
     setDisplayedPenalties([])
     setSelectedPenalties([])
@@ -2429,6 +2472,7 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Show flag with no team (just "FLAG" display with optional custom text)
   function showNoFlagPenalty(text = '') {
+    if (flagDisplayStage === 0) flagThrownAtRef.current = Date.now()
     setFlagDisplayStage(1)
     setDisplayedPenalties([])
     setSelectedPenalties([])
