@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -431,5 +431,19 @@ class NotificationPreferences(Base):
     game_end = Column(Boolean, default=True)
     score_updates = Column(Boolean, default=False)
     quarter_end = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class GamePick(Base):
+    """A viewer's pregame pick (share page Pick'em): one per browser (voter_key) per game share code.
+    Keyed by share code so it works for league and standalone games alike."""
+    __tablename__ = "game_picks"
+    __table_args__ = (UniqueConstraint("share_code", "voter_key", name="uq_game_pick_voter"),)
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    share_code = Column(String(8), nullable=False, index=True)
+    voter_key = Column(String(64), nullable=False)
+    team = Column(String(4), nullable=False)  # 'home' or 'away'
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

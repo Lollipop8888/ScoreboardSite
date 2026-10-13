@@ -759,3 +759,15 @@ class NotificationPreferences(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Pick'em
+class PickCreate(BaseModel):
+    team: str        # 'home' or 'away'
+    voter_key: str   # random id kept in the viewer's browser
+
+
+class PickCounts(BaseModel):
+    home: int
+    away: int
+    total: int

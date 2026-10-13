@@ -261,12 +261,19 @@ export default function LiveGamePage({ standalone = false }) {
     showOtherScores: false,     // other games in the league this week
     venue: { show: false, text: '' },
     sponsors: { show: false, interval: 8, items: [] }, // items: { id, text, imageUrl }
+    showWinProb: false,         // win probability bar
+    showRedZoneAuto: false,     // red zone / goal line look from the ball spot
+    showPreviousMeeting: false, // last meeting between the teams
+    showStatComparison: false,  // head-to-head team stats
+    showSeasonContext: false,   // "2nd in NFC East" under each team
+    showBreakCard: false,       // countdown card during timeouts and commercial breaks
     theme: 'dark',              // 'dark' | 'light' | 'team'
     size: 'normal',             // 'normal' | 'large' | 'xl' (applies on wide screens only)
   })
   const updateExtras = (changes) => setScoreboardExtras(prev => ({ ...prev, ...changes }))
   const [driveSummary, setDriveSummary] = useState(null) // { id, team, plays, yards, seconds, result }
   const [scoringRun, setScoringRun] = useState(null)     // { team, points }: consecutive points by one team
+  const [breakStartedAt, setBreakStartedAt] = useState(null) // when the current commercial break started (break card clock)
   // Close call being decided on the field: { type: 'firstDown' | 'touchdown' | 'catch' | 'fumble', result: null | 'yes' | 'no' }
   const [closeCall, setCloseCall] = useState(null)
   // Quarter whose clock hit 0:00 while a play may still be running; its end waits for the play
@@ -1073,6 +1080,11 @@ export default function LiveGamePage({ standalone = false }) {
     if (game.quarter === 'OT' && !last.quarter?.startsWith('OT')) setShowOTRules(true)
   }, [game?.id, game?.quarter])
 
+  // Commercial break clock starts when the break does
+  useEffect(() => {
+    setBreakStartedAt(gameStatus === 'ad-break' ? Date.now() : null)
+  }, [gameStatus === 'ad-break'])
+
   // Drives: start when a team gets the ball, summarize when it loses it
   const driveRef = useRef(null) // { team, startSpot, startTop, plays, punted, logStart }
   const prevPossessionForDriveRef = useRef(null)
@@ -1238,6 +1250,7 @@ export default function LiveGamePage({ standalone = false }) {
       scoringRun,
       ballOn,
       currentDrive: driveRef.current, // so a page reload doesn't restart the drive
+      breakStartedAt,
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -1255,7 +1268,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules, closeCall, scoreboardExtras, driveSummary, scoringRun])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules, closeCall, scoreboardExtras, driveSummary, scoringRun, breakStartedAt])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -3569,7 +3582,7 @@ export default function LiveGamePage({ standalone = false }) {
               timeOfPossession={timeOfPossession}
               showOTRules={showOTRules}
               closeCall={closeCall}
-              extras={{ scoreboardExtras, driveSummary, scoringRun, ballOn, gameLog }}
+              extras={{ scoreboardExtras, driveSummary, scoringRun, ballOn, gameLog, breakStartedAt }}
               showCoinToss={showCoinToss}
               coinTossData={coinToss}
             />
@@ -7496,6 +7509,12 @@ export default function LiveGamePage({ standalone = false }) {
                 { key: 'showScoringSummary', label: 'Scoring summary (auto at halftime and final)' },
                 { key: 'showScoringRuns', label: 'Scoring runs ("17 straight points")' },
                 { key: 'showOtherScores', label: "Other scores this week", disabled: standalone },
+                { key: 'showWinProb', label: 'Win probability bar' },
+                { key: 'showRedZoneAuto', label: 'Red zone / goal line (needs ball spot)' },
+                { key: 'showStatComparison', label: 'Team stat comparison' },
+                { key: 'showBreakCard', label: 'Break card during timeouts and commercials' },
+                { key: 'showPreviousMeeting', label: 'Last meeting between the teams', disabled: standalone },
+                { key: 'showSeasonContext', label: 'Season context ("2nd in NFC East")', disabled: standalone },
               ].map(opt => (
                 <label key={opt.key} className={`flex items-center gap-2 ${opt.disabled ? 'opacity-50' : 'cursor-pointer'}`}>
                   <input

@@ -1053,6 +1053,43 @@ def get_game(game_id: str, db: Session = Depends(get_db)):
     return game
 
 
+# ============ Pick'em ============
+def pick_counts(db: Session, share_code: str) -> dict:
+    picks = db.query(models.GamePick).filter(models.GamePick.share_code == share_code).all()
+    home = sum(1 for p in picks if p.team == "home")
+    return {"home": home, "away": len(picks) - home, "total": len(picks)}
+
+
+@app.get("/api/picks/{share_code}", response_model=schemas.PickCounts)
+def get_picks(share_code: str, db: Session = Depends(get_db)):
+    return pick_counts(db, share_code.upper())
+
+
+@app.post("/api/picks/{share_code}", response_model=schemas.PickCounts)
+async def make_pick(share_code: str, pick: schemas.PickCreate, db: Session = Depends(get_db)):
+    """Pick a winner before kickoff (one pick per browser, changeable until the game starts)."""
+    code = share_code.upper()
+    if pick.team not in ("home", "away") or not (8 <= len(pick.voter_key) <= 64):
+        raise HTTPException(status_code=400, detail="Invalid pick")
+    game = db.query(models.Game).filter(models.Game.share_code == code).first() or \
+        db.query(models.StandaloneGame).filter(models.StandaloneGame.share_code == code).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if not (game.status == "scheduled" or game.quarter in (None, "", "Pregame")):
+        raise HTTPException(status_code=400, detail="Picks are closed once the game starts")
+    existing = db.query(models.GamePick).filter(
+        models.GamePick.share_code == code, models.GamePick.voter_key == pick.voter_key
+    ).first()
+    if existing:
+        existing.team = pick.team
+    else:
+        db.add(models.GamePick(share_code=code, voter_key=pick.voter_key, team=pick.team))
+    db.commit()
+    counts = pick_counts(db, code)
+    await manager.broadcast(f"game:{code}", {"type": "picks_update", "data": counts})
+    return counts
+
+
 @app.get("/api/games/share/{share_code}", response_model=schemas.GameWithTeams)
 def get_game_by_share_code(share_code: str, db: Session = Depends(get_db)):
     game = db.query(models.Game).options(

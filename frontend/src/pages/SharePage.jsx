@@ -405,6 +405,7 @@ function SharedGame({ game, viewerCount }) {
         gameStatus={gameStatus}
         viewerCount={viewerCount}
       />
+      <PickEm game={game} />
       <div className="flex items-center justify-center gap-4">
         <p className="text-sm text-slate-500">
           Watching live • Updates automatically
@@ -785,6 +786,71 @@ function SharedLeague({ league }) {
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
+
+// Pick'em: viewers pick a winner before kickoff. One pick per browser, changeable until the game starts.
+function PickEm({ game }) {
+  const code = game.share_code?.toUpperCase()
+  const open = game.status === 'scheduled' || !game.quarter || game.quarter === 'Pregame'
+  const [myPick, setMyPick] = useState(() => {
+    try { return localStorage.getItem(`pick_${code}`) } catch { return null }
+  })
+  const [error, setError] = useState('')
+  if (!open || !code || !game.home_team || !game.away_team) return null
+
+  const voterKey = () => {
+    try {
+      let key = localStorage.getItem('gridiron_voter_key')
+      if (!key) {
+        key = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+        localStorage.setItem('gridiron_voter_key', key)
+      }
+      return key
+    } catch {
+      return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    }
+  }
+
+  async function pick(team) {
+    setError('')
+    try {
+      const res = await fetch(`/api/picks/${code}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team, voter_key: voterKey() }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Could not save your pick')
+      setMyPick(team)
+      try { localStorage.setItem(`pick_${code}`, team) } catch { /* ignore */ }
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border bg-white dark:bg-slate-900 p-3 text-center space-y-2">
+      <p className="text-sm font-semibold">Who wins? Make your pick before kickoff</p>
+      <div className="grid grid-cols-2 gap-2">
+        {['away', 'home'].map(side => {
+          const team = side === 'home' ? game.home_team : game.away_team
+          const chosen = myPick === side
+          return (
+            <Button
+              key={side}
+              variant={chosen ? 'default' : 'outline'}
+              className="gap-2"
+              style={chosen ? { backgroundColor: team.color, borderColor: team.color } : undefined}
+              onClick={() => pick(side)}
+            >
+              {team.logo_url && <img src={team.logo_url} alt="" className="h-5 w-auto" />}
+              {team.name}{chosen ? ' ✓' : ''}
+            </Button>
+          )
+        })}
+      </div>
+      {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   )
 }
