@@ -128,8 +128,8 @@ export default function LeagueDetailPage() {
   const [addPenaltyDialogOpen, setAddPenaltyDialogOpen] = useState(false)
   const [addSubPenaltyDialogOpen, setAddSubPenaltyDialogOpen] = useState(false)
   const [editPenaltyDialogOpen, setEditPenaltyDialogOpen] = useState(false)
-  const [penaltyForm, setPenaltyForm] = useState({ name: '', yards: 5, lossOfDown: false, scope: 'league', side: 'either' })
-  const [editPenaltyForm, setEditPenaltyForm] = useState({ index: null, name: '', yards: 5, lossOfDown: false, side: 'either', parentIndex: null })
+  const [penaltyForm, setPenaltyForm] = useState({ name: '', yards: 5, lossOfDown: false, autoFirst: false, scope: 'league', side: 'either' })
+  const [editPenaltyForm, setEditPenaltyForm] = useState({ index: null, name: '', yards: 5, lossOfDown: false, autoFirst: false, side: 'either', parentIndex: null })
   const [subPenaltyForm, setSubPenaltyForm] = useState({ parentIndex: null, name: '' })
   const [inviteUsername, setInviteUsername] = useState('')
   const [invitePermission, setInvitePermission] = useState('view')
@@ -4104,6 +4104,7 @@ export default function LeagueDetailPage() {
                     const isCustom = isObject && penalty.custom
                     const yards = isObject ? penalty.yards : null
                     const lossOfDown = isObject ? penalty.lossOfDown : false
+                    const autoFirst = isObject ? !!penalty.autoFirst : false
                     const side = isObject ? penalty.side : 'either'
                     const subPenalties = isObject ? (penalty.subPenalties || []) : []
                     
@@ -4122,6 +4123,7 @@ export default function LeagueDetailPage() {
                             <div className="text-xs text-slate-500 flex gap-2 mt-0.5">
                               {yards && <span>{yards} yards</span>}
                               {lossOfDown && <span>+ Loss of Down</span>}
+                              {autoFirst && <span>+ Auto 1st Down</span>}
                               {side !== 'either' && <span>({side} only)</span>}
                             </div>
                           </div>
@@ -4137,6 +4139,7 @@ export default function LeagueDetailPage() {
                                   name,
                                   yards: yards || 5,
                                   lossOfDown,
+                                  autoFirst,
                                   side,
                                   parentIndex: null, // null means it's a top-level penalty
                                   subPenalties: subPenalties,
@@ -4216,7 +4219,7 @@ export default function LeagueDetailPage() {
                   Close
                 </Button>
                 <Button onClick={() => {
-                  setPenaltyForm({ name: '', yards: 5, lossOfDown: false, scope: 'league', side: 'either' })
+                  setPenaltyForm({ name: '', yards: 5, lossOfDown: false, autoFirst: false, scope: 'league', side: 'either' })
                   setAddPenaltyDialogOpen(true)
                 }}>
                   <Plus className="h-4 w-4 mr-1" />
@@ -4261,6 +4264,16 @@ export default function LeagueDetailPage() {
                     className="h-4 w-4 rounded"
                   />
                   <Label htmlFor="loss-of-down" className="cursor-pointer">Loss of Down</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="auto-first"
+                    checked={penaltyForm.autoFirst}
+                    onChange={(e) => setPenaltyForm({ ...penaltyForm, autoFirst: e.target.checked })}
+                    className="h-4 w-4 rounded"
+                  />
+                  <Label htmlFor="auto-first" className="cursor-pointer">Automatic 1st Down (when called on the defense)</Label>
                 </div>
                 <div className="space-y-2">
                   <Label>Applies To</Label>
@@ -4311,6 +4324,7 @@ export default function LeagueDetailPage() {
                       name: penaltyForm.name.trim(),
                       yards: penaltyForm.yards,
                       lossOfDown: penaltyForm.lossOfDown,
+                      autoFirst: penaltyForm.autoFirst,
                       side: penaltyForm.side,
                       custom: true,
                       scope: penaltyForm.scope,
@@ -4414,6 +4428,16 @@ export default function LeagueDetailPage() {
                   />
                   <Label htmlFor="edit-loss-of-down" className="cursor-pointer">Loss of Down</Label>
                 </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="edit-auto-first"
+                    checked={!!editPenaltyForm.autoFirst}
+                    onChange={(e) => setEditPenaltyForm({ ...editPenaltyForm, autoFirst: e.target.checked })}
+                    className="h-4 w-4 rounded"
+                  />
+                  <Label htmlFor="edit-auto-first" className="cursor-pointer">Automatic 1st Down (when called on the defense)</Label>
+                </div>
                 <div className="space-y-2">
                   <Label>Applies To</Label>
                   <Select
@@ -4490,6 +4514,7 @@ export default function LeagueDetailPage() {
                         name: editPenaltyForm.name.trim(),
                         yards: editPenaltyForm.yards,
                         lossOfDown: editPenaltyForm.lossOfDown,
+                        autoFirst: !!editPenaltyForm.autoFirst,
                         side: editPenaltyForm.side,
                       }
                     }

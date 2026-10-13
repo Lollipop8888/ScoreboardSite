@@ -274,6 +274,8 @@ export default function LiveGamePage({ standalone = false }) {
   const [driveSummary, setDriveSummary] = useState(null) // { id, team, plays, yards, seconds, result }
   const [scoringRun, setScoringRun] = useState(null)     // { team, points }: consecutive points by one team
   const [breakStartedAt, setBreakStartedAt] = useState(null) // when the current commercial break started (break card clock)
+  // League custom penalties (League Settings > Penalties), shown in the flag panel
+  const [leaguePenalties, setLeaguePenalties] = useState([])
   // Close call being decided on the field: { type: 'firstDown' | 'touchdown' | 'catch' | 'fumble', result: null | 'yes' | 'no' }
   const [closeCall, setCloseCall] = useState(null)
   // Coin toss: which toss ('Pregame' or 'OT') is finished and put away, so its boxes don't come back
@@ -590,6 +592,18 @@ export default function LiveGamePage({ standalone = false }) {
       setPossession(null)
     }
   }, [game?.id]) // Only run when game ID changes (initial load)
+
+  // League custom penalties for the flag panel
+  useEffect(() => {
+    if (!game?.league_id || standalone) return
+    fetch(`/api/leagues/${game.league_id}`).then(r => r.json()).then(league => {
+      let list = league?.penalties
+      try { list = typeof list === 'string' ? JSON.parse(list) : list } catch { list = [] }
+      setLeaguePenalties((Array.isArray(list) ? list : [])
+        .filter(p => p && typeof p === 'object' && p.custom && p.name)
+        .map(p => ({ name: p.name, yards: Number(p.yards) || 0, category: 'Custom', lossOfDown: !!p.lossOfDown, autoFirst: !!p.autoFirst })))
+    }).catch(() => {})
+  }, [game?.league_id, standalone])
 
   // Team records on the scoreboard come from the server, which rebuilds W/L from final scores.
   // Refetch on load and whenever this game becomes final, stops being final, or its final score
@@ -2097,7 +2111,9 @@ export default function LiveGamePage({ standalone = false }) {
   }
 
   // Close calls: the ball is dead while it's decided, so the clock stops
+  const closeCallClockWasRunningRef = useRef(false)
   function startCloseCall(type) {
+    closeCallClockWasRunningRef.current = timerRunningRef.current
     stopTimer()
     setCloseCall({ type, result: null })
   }
@@ -2136,6 +2152,16 @@ export default function LiveGamePage({ standalone = false }) {
       setPendingTurnoverReview('fumble')
       ownOverlay = true
     }
+    // Ball spotted in bounds: if the clock was running before the call, it starts again on the ruling
+    // (incomplete, touchdown, fumble, and a turnover on downs keep it stopped)
+    const inBounds = (call.type === 'firstDown' && !(result === 'no' && down === 4)) ||
+      (call.type === 'catch' && result === 'yes') || (call.type === 'fumble' && result === 'no') ||
+      (call.type === 'touchdown' && result === 'no')
+    if (inBounds && closeCallClockWasRunningRef.current) {
+      startTimer()
+      if (!(call.type === 'firstDown' && result === 'yes')) { resetPlayClock(40); startPlayClock(40, true) } // first downs already do this
+    }
+    closeCallClockWasRunningRef.current = false
     if (ownOverlay) {
       setCloseCall(null)
     } else {
@@ -2485,8 +2511,9 @@ export default function LiveGamePage({ standalone = false }) {
     subOsc.stop(now + 1.5)
   }
 
-  // Flag/Penalty functions
-  const filteredPenalties = NFL_PENALTIES.filter(p => 
+  // Flag/Penalty functions: the built-in list plus the league's custom penalties (League Settings)
+  const allPenalties = [...NFL_PENALTIES, ...leaguePenalties.filter(lp => !NFL_PENALTIES.some(p => p.name === lp.name))]
+  const filteredPenalties = allPenalties.filter(p => 
     p.name.toLowerCase().includes(penaltySearch.toLowerCase())
   )
 
@@ -4616,6 +4643,12 @@ export default function LiveGamePage({ standalone = false }) {
               <div className="relative pl-8 p-3 bg-cyan-50 dark:bg-cyan-900/30 rounded-lg space-y-2">
                 <BoxClose onClick={() => setCloseCall(null)} />
                 <p className="text-sm font-semibold text-cyan-800 dark:text-cyan-300">🤔 Close Call: {CLOSE_CALLS[closeCall.type].question}</p>
+                <div className="flex flex-wrap items-center gap-1 text-xs text-cyan-800 dark:text-cyan-300">
+                  <span>Clock ran after the play? Put time back:</span>
+                  {[1, 3, 5].map(n => (
+                    <Button key={n} size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => adjustGameTime(n)}>+{n}s</Button>
+                  ))}
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <Button className="bg-green-600 hover:bg-green-700" onClick={() => resolveCloseCall('yes')}>
                     ✓ {CLOSE_CALLS[closeCall.type].yes}
