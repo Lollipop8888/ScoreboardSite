@@ -274,6 +274,15 @@ export default function LiveGamePage({ standalone = false }) {
   const [driveSummary, setDriveSummary] = useState(null) // { id, team, plays, yards, seconds, result }
   const [scoringRun, setScoringRun] = useState(null)     // { team, points }: consecutive points by one team
   const [breakStartedAt, setBreakStartedAt] = useState(null) // when the current commercial break started (break card clock)
+  // Layout options for this device: tablet layout (big buttons, fewer cards) and the play entry panel
+  const readPref = (k) => { try { return localStorage.getItem(k) === '1' } catch { return false } }
+  const [tabletMode, setTabletModeState] = useState(() => readPref('gridiron_tablet_mode'))
+  const [showPlayEntry, setShowPlayEntryState] = useState(() => readPref('gridiron_play_entry'))
+  const setTabletMode = (v) => { setTabletModeState(v); try { localStorage.setItem('gridiron_tablet_mode', v ? '1' : '0') } catch { /* ignore */ } }
+  const setShowPlayEntry = (v) => { setShowPlayEntryState(v); try { localStorage.setItem('gridiron_play_entry', v ? '1' : '0') } catch { /* ignore */ } }
+  const [playType, setPlayType] = useState('run') // 'run' | 'pass' | 'incomplete' | 'sack' | 'kneel'
+  const [playYards, setPlayYards] = useState('')
+  const [playOutOfBounds, setPlayOutOfBounds] = useState(false)
   // League custom penalties (League Settings > Penalties), shown in the flag panel
   const [leaguePenalties, setLeaguePenalties] = useState([])
   // Close call being decided on the field: { type: 'firstDown' | 'touchdown' | 'catch' | 'fumble', result: null | 'yes' | 'no' }
@@ -2155,6 +2164,64 @@ export default function LiveGamePage({ standalone = false }) {
     }
   }
 
+  // Play entry: one step for a play's result. Logs it and updates the downs; with the ball spot on,
+  // moves the spot and detects first downs and touchdowns from it.
+  function submitPlay() {
+    const team = possession
+    if (team !== 'home' && team !== 'away') return
+    const raw = Math.abs(parseInt(playYards) || 0)
+    const resetForm = () => { setPlayYards(''); setPlayOutOfBounds(false) }
+    const restartPlayClock = () => { resetPlayClock(40); startPlayClock(40, true) }
+    if (playType === 'incomplete') {
+      addGameLogEntry('play', 'Incomplete pass', team)
+      stopTimer()
+      nextDown()
+      setShowIncomplete(true)
+      setTimeout(() => setShowIncomplete(false), 2000)
+      restartPlayClock()
+      resetForm()
+      return
+    }
+    const yards = playType === 'sack' || playType === 'kneel' ? -(raw || (playType === 'kneel' ? 1 : 0)) : (parseInt(playYards) || 0)
+    const label = { run: 'Run', pass: 'Pass complete', sack: 'Sack', kneel: 'Kneel' }[playType]
+    addGameLogEntry('play', `${label}${yards ? ` for ${yards} yd${Math.abs(yards) === 1 ? '' : 's'}` : ', no gain'}${playOutOfBounds ? ', out of bounds' : ''}`, team)
+    const tracked = scoreboardExtras.showBallSpot
+    if (tracked && yards >= yardsToGoal(ballOn, team)) {
+      // Into the end zone
+      stopTimer()
+      updateScore(team, 6, { yards, playType: playType === 'pass' ? 'pass' : 'rush' })
+      setPendingPAT(team)
+      setHideDownDistance(true)
+      resetForm()
+      return
+    }
+    const newSpot = tracked ? advanceSpot(ballOn, team, yards) : ballOn
+    if (tracked) setBallOn(newSpot)
+    if (specialDistance !== 'goal' && yards >= distance) {
+      // First down (inside the 10 with the spot tracked: & Goal)
+      resetDowns()
+      setShowDownOnly(false)
+      setShowFirstDown(true)
+      setTimeout(() => setShowFirstDown(false), 3000)
+      recordPlayResult('firstDown')
+      if (tracked && yardsToGoal(newSpot, team) <= 10) {
+        setDistance(yardsToGoal(newSpot, team))
+        setSpecialDistance('goal')
+      }
+    } else {
+      if (specialDistance === 'goal' && tracked) setDistance(Math.max(1, yardsToGoal(newSpot, team)))
+      else setDistance(Math.max(1, distance - yards))
+      nextDown()
+    }
+    if (playOutOfBounds) {
+      stopTimer()
+      setShowOutOfBounds(true)
+      setTimeout(() => setShowOutOfBounds(false), 2000)
+    }
+    restartPlayClock()
+    resetForm()
+  }
+
   // Close calls: the ball is dead while it's decided, so the clock stops
   const closeCallClockWasRunningRef = useRef(false)
   function startCloseCall(type) {
@@ -3560,6 +3627,18 @@ export default function LiveGamePage({ standalone = false }) {
         </DialogContent>
       </Dialog>
 
+      {/* Layout options for this device */}
+      {game.status === 'live' && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button size="sm" variant={tabletMode ? 'default' : 'outline'} className={tabletMode ? 'bg-emerald-600 hover:bg-emerald-700' : ''} onClick={() => setTabletMode(!tabletMode)}>
+            📱 Tablet layout{tabletMode ? ' ✓' : ''}
+          </Button>
+          <Button size="sm" variant={showPlayEntry ? 'default' : 'outline'} className={showPlayEntry ? 'bg-sky-600 hover:bg-sky-700' : ''} onClick={() => setShowPlayEntry(!showPlayEntry)}>
+            📝 Play entry{showPlayEntry ? ' ✓' : ''}
+          </Button>
+        </div>
+      )}
+
       {/* Scoreboard Preview - NOW AT TOP */}
       {game.status === 'live' && (
         <Card className="border-2 border-slate-300 overflow-visible" data-tutorial="display-preview">
@@ -3649,8 +3728,111 @@ export default function LiveGamePage({ standalone = false }) {
 
       {/* Old preview content removed - now using shared GameScoreboardDisplay component */}
 
+      {/* Tablet layout: the actions used most, as big buttons */}
+      {game.status === 'live' && tabletMode && (
+          <Card className="border-2 border-emerald-300 dark:border-emerald-800">
+            <CardContent className="pt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* Clock, possession, timeouts */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2">
+                  <span className="text-sm font-bold text-slate-500">{game.quarter}</span>
+                  <span className="text-3xl font-mono font-black">{game.game_time}</span>
+                </div>
+                <Button className={`w-full h-14 text-lg ${timerRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}`} onClick={toggleTimer}>
+                  {timerRunning ? '⏸ Stop Clock' : '▶ Start Clock'}
+                </Button>
+                <div className="grid grid-cols-2 gap-2">
+                  {['away', 'home'].map(t => (
+                    <Button key={t} variant={possession === t ? 'default' : 'outline'} className="h-12" onClick={() => { setPossession(t); resetDowns() }}>
+                      🏈 {(t === 'home' ? game.home_team : game.away_team)?.abbreviation}
+                    </Button>
+                  ))}
+                  {['away', 'home'].map(t => (
+                    <Button key={`to-${t}`} variant="outline" className="h-12" disabled={(t === 'home' ? homeTimeouts : awayTimeouts) === 0} onClick={() => useTimeout(t)}>
+                      ⏱ TO {(t === 'home' ? game.home_team : game.away_team)?.abbreviation} ({t === 'home' ? homeTimeouts : awayTimeouts})
+                    </Button>
+                  ))}
+                </div>
+                <Button variant="outline" className="w-full h-12" disabled={undoCount === 0} onClick={undoLastChange}>↩️ Undo{undoCount > 0 ? ` (${undoCount})` : ''}</Button>
+              </div>
+              {/* Downs */}
+              <div className="space-y-2">
+                <div className="rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-2 text-center">
+                  <p className="text-2xl font-black">{formatDownDistance(down, distance, specialDistance)}</p>
+                  {scoreboardExtras.showBallSpot && <p className="text-xs text-slate-500">Ball on {spotLabel(ballOn, game.home_team?.abbreviation, game.away_team?.abbreviation)}</p>}
+                </div>
+                <Button className="w-full h-14 text-lg bg-gradient-to-r from-yellow-500 to-orange-500 text-white" onClick={awardFirstDown}>⬇️ First Down</Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="outline" className="h-12" onClick={() => { if (!playClockRunning) { setPlayClock(40); startPlayClock(40, true) } nextDown() }}>Next Down</Button>
+                  <Button variant="outline" className="h-12" onClick={() => { stopTimer(); nextDown(); setShowIncomplete(true); setTimeout(() => setShowIncomplete(false), 2000) }}>❌ Incomplete</Button>
+                  <Button variant="outline" className="h-12" onClick={() => { stopTimer(); nextDown(); setShowOutOfBounds(true); setTimeout(() => setShowOutOfBounds(false), 2000) }}>📍 Out of Bounds</Button>
+                  <Button variant="outline" className="h-12 border-red-400 text-red-700" onClick={() => setShowTurnover('selecting')}>🔄 Turnover</Button>
+                </div>
+                <div className="flex flex-wrap gap-1 justify-center">
+                  <span className="text-xs text-slate-500 self-center">Gain:</span>
+                  {[-5, -1, 1, 5, 10].map(y => (
+                    <Button key={y} size="sm" variant="outline" className="h-10 px-3" disabled={possession !== 'home' && possession !== 'away'} onClick={() => moveBall(y)}>{y > 0 ? `+${y}` : y}</Button>
+                  ))}
+                </div>
+              </div>
+              {/* Scoring, kicks, flag */}
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  {['away', 'home'].map(t => (
+                    <Button key={`td-${t}`} className="h-14 text-base bg-green-600 hover:bg-green-700" onClick={() => {
+                      stopTimer(); updateScore(t, 6); setPendingPAT(t); setHideDownDistance(true)
+                    }}>TD {(t === 'home' ? game.home_team : game.away_team)?.abbreviation}</Button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="outline" className="h-12" onClick={() => setShowFGDistanceDialog(true)}>🥅 Field Goal</Button>
+                  <Button variant="outline" className="h-12" onClick={() => setGameStatus('punt')}>🦶 Punt</Button>
+                  <Button variant="outline" className="h-12" onClick={() => { setGameStatus('kickoff'); setHideDownDistance(true) }}>🏈 Kickoff</Button>
+                  <Button variant="outline" className="h-12" onClick={() => scoreSafety(possession === 'home' ? 'away' : 'home')}>🛡️ Safety</Button>
+                </div>
+                <Button className="w-full h-14 text-lg bg-yellow-500 hover:bg-yellow-600 text-black font-bold" onClick={showFlagStage1}>🚩 FLAG</Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+      {/* Play entry (toggle above) */}
+      {game.status === 'live' && showPlayEntry && (
+          <Card className="border-2 border-sky-300 dark:border-sky-800">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg flex items-center gap-2">📝 Play Entry
+                <span className="text-xs font-normal text-slate-500">{possession === 'home' || possession === 'away' ? `${(possession === 'home' ? game.home_team : game.away_team)?.abbreviation} ball · ${formatDownDistance(down, distance, specialDistance)}` : 'Set possession first'}</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                {[['run', '🏃 Run'], ['pass', '🏈 Pass'], ['incomplete', '❌ Incomplete'], ['sack', '💥 Sack'], ['kneel', '🧎 Kneel']].map(([t, label]) => (
+                  <Button key={t} size="sm" variant={playType === t ? 'default' : 'outline'} className={playType === t ? 'bg-sky-600 hover:bg-sky-700' : ''} onClick={() => setPlayType(t)}>{label}</Button>
+                ))}
+              </div>
+              {playType !== 'incomplete' && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-slate-600 dark:text-slate-300">{playType === 'sack' || playType === 'kneel' ? 'Yards lost' : 'Yards gained'}</span>
+                  <Input type="number" value={playYards} onChange={(e) => setPlayYards(e.target.value)} placeholder="0" className="h-9 w-20" />
+                  {(playType === 'sack' || playType === 'kneel' ? [1, 3, 5, 8] : [-2, 3, 5, 10, 20]).map(y => (
+                    <Button key={y} size="sm" variant="outline" className="h-9 px-2 text-xs" onClick={() => setPlayYards(String(y))}>{y > 0 && playType !== 'sack' && playType !== 'kneel' ? `+${y}` : y}</Button>
+                  ))}
+                  <label className="flex items-center gap-1.5 text-sm cursor-pointer ml-1">
+                    <input type="checkbox" checked={playOutOfBounds} onChange={(e) => setPlayOutOfBounds(e.target.checked)} />
+                    Out of bounds
+                  </label>
+                </div>
+              )}
+              <Button className="w-full bg-sky-600 hover:bg-sky-700 h-11 text-base" disabled={possession !== 'home' && possession !== 'away'} onClick={submitPlay}>
+                Enter play
+              </Button>
+              <p className="text-[11px] text-slate-500">Updates the downs and the game log. With the ball spot on, it also moves the spot and spots first downs and touchdowns. Use Undo to take a play back.</p>
+            </CardContent>
+          </Card>
+        )}
+
       {/* Scoring Controls - Right below preview */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <div className="grid md:grid-cols-2 gap-4" data-tutorial="scoring-panel">
           {/* Away Team Scoring */}
           <Card>
@@ -3971,7 +4153,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Clock & Down Controls Row */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <div className="grid lg:grid-cols-2 gap-4 [&>*]:min-w-0">
           {/* Game Clock & Play Clock Controls */}
           <Card data-tutorial="game-clock">
@@ -6808,7 +6990,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* FG Attempt / PAT / 2PT Section */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <Card className="border-amber-300 bg-amber-50 dark:bg-slate-900 dark:border-amber-600">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-amber-800 dark:text-amber-400">
@@ -7156,7 +7338,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Game Status Controls */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
@@ -7541,7 +7723,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Scoreboard Extras */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg flex items-center gap-2">
@@ -7690,7 +7872,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Extra Info Box Card */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg flex items-center gap-2">
@@ -7971,7 +8153,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Review & Game Controls Row */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <div className="grid lg:grid-cols-3 gap-4">
           {/* Review Control Panel */}
           <Card className="border-red-300 bg-red-50 dark:bg-slate-900 dark:border-red-700 lg:col-span-2">
@@ -8347,7 +8529,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Quick Stats Panel - Full Width */}
-      {game.status === 'live' && (
+      {game.status === 'live' && !tabletMode && (
         <Card>
           <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowQuickStats(!showQuickStats)}>
               <CardTitle className="text-lg flex items-center justify-between">
@@ -8748,6 +8930,7 @@ export default function LiveGamePage({ standalone = false }) {
                           entry.type === 'down' ? 'bg-blue-100 text-blue-700' :
                           entry.type === 'kick' ? 'bg-orange-100 text-orange-700' :
                           entry.type === 'close-call' ? 'bg-cyan-100 text-cyan-700' :
+                          entry.type === 'play' ? 'bg-sky-100 text-sky-700' :
                           'bg-slate-100 text-slate-600'
                         }`}>{entry.type}</span>
                         {entry.team && (
@@ -8972,7 +9155,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Coin Toss - Compact Section */}
-      {game && (
+      {game && !tabletMode && (
         <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-slate-600 dark:text-slate-400">🪙 Coin Toss:</span>
@@ -9050,7 +9233,7 @@ export default function LiveGamePage({ standalone = false }) {
       )}
 
       {/* Viewer Notifications Card */}
-      {game && (
+      {game && !tabletMode && (
         <Card>
           <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowNotificationPanel(!showNotificationPanel)}>
             <CardTitle className="text-lg flex items-center justify-between">
