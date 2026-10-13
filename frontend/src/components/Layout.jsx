@@ -65,7 +65,7 @@ export default function Layout() {
                       key={item.path}
                       to={item.path}
                       className={cn(
-                        "flex items-center gap-1 sm:gap-2 rounded-lg px-2 sm:px-4 py-1.5 sm:py-2 text-sm font-medium transition-colors",
+                        "flex items-center gap-1 sm:gap-2 rounded-lg px-1.5 sm:px-4 py-1.5 sm:py-2 text-sm font-medium transition-colors",
                         isActive
                           ? "bg-green-600 text-white"
                           : "text-slate-600 dark:text-slate-300 hover:bg-green-50 dark:hover:bg-slate-800 hover:text-green-700 dark:hover:text-green-400"
@@ -83,7 +83,7 @@ export default function Layout() {
                 variant="ghost"
                 size="icon"
                 onClick={toggleTheme}
-                className="ml-2"
+                className="sm:ml-2"
                 title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
               >
                 {theme === 'light' ? (
@@ -99,7 +99,7 @@ export default function Layout() {
                   {user ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="ml-2 gap-1">
+                        <Button variant="outline" size="sm" className="sm:ml-2 gap-1">
                           <User className="h-4 w-4" />
                           <span className="hidden sm:inline">{user.username}</span>
                         </Button>

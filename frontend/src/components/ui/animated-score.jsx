@@ -21,15 +21,15 @@ function SlidingDigit({ digit, direction = 'up', color, size }) {
   const sizeClasses = {
     sm: 'text-2xl',
     default: 'text-4xl',
-    lg: 'text-6xl',
-    xl: 'text-7xl',
+    lg: 'text-5xl sm:text-6xl',
+    xl: 'text-6xl sm:text-7xl',
   }
   
   const heightClasses = {
     sm: 'h-8',
     default: 'h-12',
-    lg: 'h-16',
-    xl: 'h-20',
+    lg: 'h-14 sm:h-16',
+    xl: 'h-16 sm:h-20',
   }
   
   const textStyle = { 
@@ -203,15 +203,15 @@ export function AnimatedScore({
   const sizeClasses = {
     sm: 'text-3xl',
     default: 'text-5xl',
-    lg: 'text-7xl',
-    xl: 'text-8xl',
+    lg: 'text-5xl sm:text-7xl',
+    xl: 'text-6xl sm:text-8xl',
   }
   
   const heightClasses = {
     sm: 'h-10',
     default: 'h-14',
-    lg: 'h-20',
-    xl: 'h-24',
+    lg: 'h-14 sm:h-20',
+    xl: 'h-16 sm:h-24',
   }
   
   const deltaSizeClasses = {

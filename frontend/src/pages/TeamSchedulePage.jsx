@@ -258,8 +258,8 @@ export default function TeamSchedulePage() {
       {/* Team Record */}
       <Card>
         <CardContent className="py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-4 sm:gap-6">
               <div className="text-center">
                 <p className="text-2xl font-bold text-green-600">{record.wins}</p>
                 <p className="text-xs text-slate-500">Wins</p>
@@ -308,7 +308,7 @@ export default function TeamSchedulePage() {
                 </div>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button onClick={() => setAddGameDialogOpen(true)} className="gap-2">
                 <Plus className="h-4 w-4" />
                 Add Game
@@ -396,14 +396,14 @@ export default function TeamSchedulePage() {
                 return (
                   <div
                     key={game.id}
-                    className={`flex items-center justify-between rounded-lg border p-4 ${
+                    className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3 sm:p-4 ${
                       isWin ? 'bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800' : 
                       isLoss ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800' : 
                       isTie ? 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700' : ''
                     }`}
                   >
-                    <div className="flex items-center gap-4">
-                      <div className="text-center w-16">
+                    <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                      <div className="text-center w-16 shrink-0">
                         {game.scheduled_at ? (
                           <>
                             <p className="text-xs text-slate-500">
@@ -447,10 +447,10 @@ export default function TeamSchedulePage() {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4">
                       {game.status === 'final' ? (
                         <div className="flex items-center gap-2">
-                          <span className={`text-lg font-bold ${isWin ? 'text-green-600' : isLoss ? 'text-red-600' : ''}`}>
+                          <span className={`text-lg font-bold whitespace-nowrap ${isWin ? 'text-green-600' : isLoss ? 'text-red-600' : ''}`}>
                             {teamScore} - {opponentScore}
                           </span>
                           <span className={`text-xs font-bold px-2 py-0.5 rounded ${

@@ -2988,7 +2988,7 @@ export default function LiveGamePage({ standalone = false }) {
                     💬 Text/SMS
                   </Button>
                 </div>
-                <div className="grid grid-cols-3 gap-2 mt-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2">
                   <Button
                     variant="outline"
                     size="sm"
@@ -3359,7 +3359,7 @@ export default function LiveGamePage({ standalone = false }) {
             </CardTitle>
             <CardDescription>This is exactly what viewers see on the scoreboard</CardDescription>
           </CardHeader>
-          <CardContent className="overflow-visible">
+          <CardContent className="overflow-visible px-1 sm:px-6">
             <GameScoreboardDisplay
               game={game}
               possession={possession}
@@ -3760,14 +3760,14 @@ export default function LiveGamePage({ standalone = false }) {
 
       {/* Clock & Down Controls Row */}
       {game.status === 'live' && (
-        <div className="grid lg:grid-cols-2 gap-4">
+        <div className="grid lg:grid-cols-2 gap-4 [&>*]:min-w-0">
           {/* Game Clock & Play Clock Controls */}
           <Card data-tutorial="game-clock">
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">Clock Controls</CardTitle>
             </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid md:grid-cols-2 gap-4">
+            <div className="grid md:grid-cols-2 gap-4 [&>*]:min-w-0">
               {/* Game Clock */}
               <div className="bg-slate-100 dark:bg-slate-800 rounded-lg p-4">
                 {/* Timeout Indicator */}
@@ -4069,7 +4069,7 @@ export default function LiveGamePage({ standalone = false }) {
             </div>
             
             {/* Reset Timeouts */}
-            <div className="flex items-center justify-center gap-3 pt-2 border-t">
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 pt-2 border-t">
               <Button variant="outline" size="sm" onClick={() => resetTimeoutsForHalf(game.quarter === 'OT' || game.quarter?.startsWith('OT'))} className="gap-2">
                 <RotateCcw className="h-4 w-4" />
                 Reset Timeouts ({game.quarter === 'OT' || game.quarter?.startsWith('OT') ? '2' : '3'})
@@ -4110,7 +4110,7 @@ export default function LiveGamePage({ standalone = false }) {
               <CardTitle className="text-lg">Down & Distance</CardTitle>
             </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {/* Down */}
               <div className="bg-slate-100 dark:bg-slate-800 rounded-lg p-3 text-center">
                 <p className="text-xs text-slate-500 uppercase mb-1">Down</p>
@@ -4184,7 +4184,7 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
               
               {/* Possession */}
-              <div className="bg-slate-100 dark:bg-slate-800 rounded-lg p-3">
+              <div className="col-span-2 sm:col-span-1 bg-slate-100 dark:bg-slate-800 rounded-lg p-3">
                 <p className="text-xs text-slate-500 uppercase mb-2 text-center">Possession</p>
                 <div className="flex gap-2">
                   <button
@@ -4267,7 +4267,7 @@ export default function LiveGamePage({ standalone = false }) {
               </Button>
 
               {/* Close calls - put the question on the scoreboard while it's decided (not a replay review) */}
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {CLOSE_CALL_TYPES.map(type => (
                   <Button
                     key={type}
@@ -4282,7 +4282,7 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
               
               {/* Other Actions - Grid */}
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <Button 
                   variant="outline" 
                   size="sm" 
@@ -4511,7 +4511,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                   🪙 {coinToss.winner === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation} won - Election?
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     size="sm"
                     className="bg-green-600 hover:bg-green-700"
@@ -4727,7 +4727,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-blue-800 dark:text-blue-300">
                   After TD - {pendingPAT === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation}
                 </p>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <Button 
                     className="bg-blue-600 hover:bg-blue-700"
                     onClick={() => {
@@ -4785,7 +4785,7 @@ export default function LiveGamePage({ standalone = false }) {
             {flagDisplayStage > 0 && (
               <div className="p-3 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg space-y-2">
                 <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-300">🚩 Flag Result</p>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <Button 
                     size="sm"
                     className={`text-xs ${flagResult === 'picked-up' ? 'bg-green-700 ring-2 ring-green-400' : 'bg-green-600 hover:bg-green-700'}`}
@@ -4961,7 +4961,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                   {showPATAttempt === 'pat' ? 'PAT Attempt' : '2PT Conversion'}
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -5110,7 +5110,7 @@ export default function LiveGamePage({ standalone = false }) {
                     <span className="ml-2 px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full">4 PT RANGE</span>
                   )}
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -5272,7 +5272,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-red-800 dark:text-red-300">
                   {pendingTurnoverReview === 'downs' ? 'Turnover on Downs' : 'Interception'} - Review?
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -5377,7 +5377,7 @@ export default function LiveGamePage({ standalone = false }) {
               <div className="relative pl-8 p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
                 <BoxClose onClick={() => { setPendingTurnoverReview(null); setShowTurnover(null) }} />
                 <p className="text-sm font-semibold text-red-800 dark:text-red-300">Fumble - Review or Recovery?</p>
-                <div className="grid grid-cols-3 gap-2 mb-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
@@ -5446,7 +5446,7 @@ export default function LiveGamePage({ standalone = false }) {
               <div className="relative pl-8 p-3 bg-red-100 dark:bg-red-900/30 rounded-lg space-y-2">
                 <BoxClose onClick={() => { setPendingFumble(false); setShowTurnover(null) }} />
                 <p className="text-sm font-semibold text-red-800 dark:text-red-300">Fumble - Who Recovers?</p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     className="bg-amber-600 hover:bg-amber-700"
                     onClick={() => {
@@ -5521,7 +5521,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-orange-800 dark:text-orange-300">
                   {kickingTeam === 'home' ? game.home_team.abbreviation : game.away_team.abbreviation} is kicking - What type?
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     className="bg-blue-600 hover:bg-blue-700 text-white"
                     onClick={() => {
@@ -5707,7 +5707,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                   End of {game.quarter} {game.home_score === game.away_score ? '- Still Tied' : ''}
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => finalizeGame()}
@@ -6016,7 +6016,7 @@ export default function LiveGamePage({ standalone = false }) {
               <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
                 <BoxClose onClick={() => { setGameStatus(null) }} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">Punt Result</p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Button 
                     className="bg-blue-600 hover:bg-blue-700"
                     onClick={() => {
@@ -6248,7 +6248,7 @@ export default function LiveGamePage({ standalone = false }) {
           
           <CardContent className="space-y-4">
               {/* Three-Stage Flag Buttons */}
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 <Button
                   size="lg"
                   className={`gap-2 ${flagDisplayStage >= 1 ? 'bg-yellow-600' : 'bg-yellow-500 hover:bg-yellow-600'} text-black font-bold`}
@@ -6279,7 +6279,7 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
               
               {/* No Team Flag Options */}
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <Button
                   size="sm"
                   variant="outline"
@@ -6507,9 +6507,9 @@ export default function LiveGamePage({ standalone = false }) {
           </CardHeader>
           <CardContent className="space-y-3">
             {!showFGAttempt ? (
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {/* FG Attempt - Left side */}
-                <div className="col-span-2 space-y-3">
+                <div className="sm:col-span-2 space-y-3">
                   {/* Distance selector */}
                   <div className="flex items-center gap-3">
                     <Label className="text-amber-800 font-medium">Distance:</Label>
@@ -6560,7 +6560,7 @@ export default function LiveGamePage({ standalone = false }) {
                 </div>
                 
                 {/* PAT / 2PT - Right side */}
-                <div className="space-y-2 border-l pl-4 border-amber-300">
+                <div className="space-y-2 border-t pt-3 sm:border-t-0 sm:pt-0 sm:border-l sm:pl-4 border-amber-300">
                   <p className="text-xs text-amber-700 font-semibold uppercase">After TD</p>
                   {!showPATAttempt ? (
                     <>
@@ -6735,7 +6735,7 @@ export default function LiveGamePage({ standalone = false }) {
                 
                 {/* Result buttons */}
                 {!fgResult && (
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <Button 
                       className="bg-green-600 hover:bg-green-700 text-white font-bold"
                       onClick={() => {
@@ -6865,7 +6865,7 @@ export default function LiveGamePage({ standalone = false }) {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               <Button
                 variant={gameStatus === 'kickoff' ? 'default' : 'outline'}
                 className={`flex-col h-auto py-3 ${gameStatus === 'kickoff' ? 'bg-green-600 hover:bg-green-700' : 'border-green-400 text-green-700 hover:bg-green-50'}`}
@@ -7057,7 +7057,7 @@ export default function LiveGamePage({ standalone = false }) {
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                 <Button
                   variant={showRedZone ? 'default' : 'outline'}
                   className={`flex-col h-auto py-2 ${showRedZone ? 'bg-red-600 hover:bg-red-700 text-white' : 'border-red-400 text-red-700 hover:bg-red-50'}`}
@@ -7107,7 +7107,7 @@ export default function LiveGamePage({ standalone = false }) {
               {bigPlay === 'fumble' && (
                 <div className="mt-3 p-3 bg-orange-100 rounded-lg border border-orange-300">
                   <p className="text-xs font-semibold text-orange-800 mb-2">Fumble Recovery:</p>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     <Button
                       size="sm"
                       className="bg-green-600 hover:bg-green-700 text-white text-xs"
@@ -7256,7 +7256,7 @@ export default function LiveGamePage({ standalone = false }) {
                 </Button>
               </div>
               {extraInfo.lines.map((line, index) => (
-                <div key={index} className="flex gap-1 items-center">
+                <div key={index} className="flex flex-wrap gap-1 items-center">
                   <Input
                     placeholder={`Line ${index + 1}...`}
                     value={line.text}
@@ -7264,7 +7264,7 @@ export default function LiveGamePage({ standalone = false }) {
                       ...prev,
                       lines: prev.lines.map((l, i) => i === index ? { ...l, text: e.target.value } : l)
                     }))}
-                    className="flex-1"
+                    className="flex-1 min-w-[8rem]"
                   />
                   <input
                     type="color"
@@ -7309,7 +7309,7 @@ export default function LiveGamePage({ standalone = false }) {
               ))}
             </div>
             
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-slate-500">Position</p>
                 <div className="flex gap-1">
@@ -7945,7 +7945,7 @@ export default function LiveGamePage({ standalone = false }) {
                   )}
                   {game.away_team?.name || 'Away Team'}
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {/* Turnovers */}
                   <div className="bg-red-50 dark:bg-red-900/20 rounded p-2 text-center">
                     <div className="flex items-center justify-center gap-1">
@@ -7993,7 +7993,7 @@ export default function LiveGamePage({ standalone = false }) {
                   )}
                   {game.home_team?.name || 'Home Team'}
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {/* Turnovers */}
                   <div className="bg-red-50 dark:bg-red-900/20 rounded p-2 text-center">
                     <div className="flex items-center justify-center gap-1">
@@ -8593,7 +8593,7 @@ export default function LiveGamePage({ standalone = false }) {
               {/* Auto-notification toggles */}
               <div className="space-y-2">
                 <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Auto-send notifications:</p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <label className="flex items-center gap-2 text-sm">
                     <input 
                       type="checkbox" 

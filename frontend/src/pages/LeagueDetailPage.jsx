@@ -712,7 +712,7 @@ export default function LeagueDetailPage() {
       </div>
 
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{league.name}</h1>
@@ -738,7 +738,7 @@ export default function LeagueDetailPage() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {user && (
             <Button
               variant={isFollowing ? "default" : "outline"}
@@ -814,7 +814,7 @@ export default function LeagueDetailPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList data-tutorial="league-tabs">
+        <TabsList data-tutorial="league-tabs" className="w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="standings" className="gap-2">
             <Trophy className="h-4 w-4" />
             Standings

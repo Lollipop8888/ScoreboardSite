@@ -1355,7 +1355,7 @@ export function GameScoreboardDisplay({
       </div>
       
       {/* Teams and Scores */}
-      <div className="grid grid-cols-3 gap-4 items-center overflow-visible">
+      <div className="grid grid-cols-3 gap-1 sm:gap-4 items-center overflow-visible [&>*]:min-w-0">
         {/* Away Team (Left) - with extra info on left side */}
         <div className="flex items-center gap-2 overflow-visible">
           {/* Extra Info Box - Left of Away Team */}
@@ -1383,7 +1383,7 @@ export function GameScoreboardDisplay({
                 src={awayTeam.logo_url}
                 alt={awayTeam.name}
                 className={`w-auto mx-auto object-contain mb-2 transition-all duration-500 ${
-                  hideDownDistance ? 'h-24 max-w-32' : 'h-16 max-w-24'
+                  hideDownDistance ? 'h-16 max-w-20 sm:h-24 sm:max-w-32' : 'h-12 max-w-16 sm:h-16 sm:max-w-24'
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
@@ -1393,7 +1393,7 @@ export function GameScoreboardDisplay({
             ) : (
               <div 
                 className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
-                  hideDownDistance ? 'w-24 h-24' : 'w-16 h-16'
+                  hideDownDistance ? 'w-16 h-16 sm:w-24 sm:h-24' : 'w-12 h-12 sm:w-16 sm:h-16'
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'away') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
@@ -1411,7 +1411,7 @@ export function GameScoreboardDisplay({
             </div>
             {possession === 'away' && !hidePossession && (
               <div className="flex items-center justify-center gap-1.5 mt-1">
-                <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
+                <span className="text-[10px] sm:text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
               </div>
             )}
             {!hideScore && (
@@ -1533,9 +1533,9 @@ export function GameScoreboardDisplay({
                   </div>
                 )
               })()}
-              <div className={`flex items-center justify-center gap-3 transition-all duration-300 ${hideClock ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'}`}>
-                <span className="text-slate-500 text-lg font-bold uppercase tracking-wider">{game.quarter}</span>
-                <span className={`text-4xl font-mono font-black tracking-tight ${
+              <div className={`flex items-center justify-center gap-1.5 sm:gap-3 transition-all duration-300 ${hideClock ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'}`}>
+                <span className="text-slate-500 text-sm sm:text-lg font-bold uppercase tracking-wider">{game.quarter}</span>
+                <span className={`text-3xl sm:text-4xl font-mono font-black tracking-tight ${
                   game.game_time === '0:00' 
                     ? 'text-red-500 drop-shadow-[0_0_12px_rgba(239,68,68,0.6)] animate-pulse' 
                     : (['Q2', 'Q4', 'OT', 'OT1', 'OT2', 'OT3'].includes(game.quarter) && 
@@ -1574,7 +1574,7 @@ export function GameScoreboardDisplay({
                 src={homeTeam.logo_url}
                 alt={homeTeam.name}
                 className={`w-auto mx-auto object-contain mb-2 transition-all duration-500 ${
-                  hideDownDistance ? 'h-24 max-w-32' : 'h-16 max-w-24'
+                  hideDownDistance ? 'h-16 max-w-20 sm:h-24 sm:max-w-32' : 'h-12 max-w-16 sm:h-16 sm:max-w-24'
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg' 
@@ -1584,7 +1584,7 @@ export function GameScoreboardDisplay({
             ) : (
               <div 
                 className={`mx-auto flex items-center justify-center mb-2 transition-all duration-500 ${
-                  hideDownDistance ? 'w-24 h-24' : 'w-16 h-16'
+                  hideDownDistance ? 'w-16 h-16 sm:w-24 sm:h-24' : 'w-12 h-12 sm:w-16 sm:h-16'
                 } ${
                   flagDisplayStage === 2 && displayedPenalties.some(p => p.team === 'home') 
                     ? 'ring-4 ring-yellow-400 ring-offset-2 ring-offset-slate-900 rounded-lg p-2' 
@@ -1602,7 +1602,7 @@ export function GameScoreboardDisplay({
             </div>
             {possession === 'home' && !hidePossession && (
               <div className="flex items-center justify-center gap-1.5 mt-1">
-                <span className="text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
+                <span className="text-[10px] sm:text-xs font-bold text-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]">🏈 POSSESSION</span>
               </div>
             )}
             {!hideScore && (
