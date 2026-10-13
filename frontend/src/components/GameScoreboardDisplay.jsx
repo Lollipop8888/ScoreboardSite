@@ -1753,7 +1753,7 @@ export function GameScoreboardDisplay({
                 <span className={`sb-clock text-3xl sm:text-4xl font-mono font-black tracking-tight ${
                   game.game_time === '0:00' 
                     ? 'text-red-500 drop-shadow-[0_0_12px_rgba(239,68,68,0.6)] animate-pulse' 
-                    : (['Q2', 'Q4', 'OT', 'OT1', 'OT2', 'OT3'].includes(game.quarter) && 
+                    : ((['Q2', 'Q4'].includes(game.quarter) || game.quarter?.startsWith('OT')) && 
                        game.game_time && 
                        (() => {
                          const parts = game.game_time.split(':')

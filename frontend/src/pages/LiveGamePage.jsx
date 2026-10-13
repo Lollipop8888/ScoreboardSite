@@ -1900,8 +1900,8 @@ export default function LiveGamePage({ standalone = false }) {
       return
     }
     
-    // Handle 2-minute warning - auto stop clock and show 2-min warning status
-    if (newSeconds === 120 && ['Q2', 'Q4'].includes(currentGame.quarter)) {
+    // Handle 2-minute warning (end of each half, and every overtime period) - auto stop clock and show 2-min warning status
+    if (newSeconds === 120 && (['Q2', 'Q4'].includes(currentGame.quarter) || currentGame.quarter?.startsWith('OT'))) {
       timerRunningRef.current = false
       setTimerRunning(false)
       setGameStatus('two-minute') // Automatically show 2-min warning
