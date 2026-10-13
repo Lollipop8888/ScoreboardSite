@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { CLOSE_CALLS, CLOSE_CALL_TYPES } from '@/lib/closeCalls'
 import { getOvertimeRules } from '@/lib/overtime'
 import { useParams } from 'react-router-dom'
 import { Plus, Minus, Play, Square, Share2, Copy, Check, Trophy, RotateCcw, Flag, Pause, Volume2, Bell, Search, X, Eye, EyeOff, Video, Upload, Trash2, Zap, Send, Settings, Keyboard } from 'lucide-react'
@@ -250,6 +251,8 @@ export default function LiveGamePage({ standalone = false }) {
   const [showOTEndPrompt, setShowOTEndPrompt] = useState(false)
   // Overtime rules panel on the scoreboard: shown when OT starts, hidden when the clock starts
   const [showOTRules, setShowOTRules] = useState(false)
+  // Close call being decided on the field: { type: 'firstDown' | 'touchdown' | 'catch' | 'fumble', result: null | 'yes' | 'no' }
+  const [closeCall, setCloseCall] = useState(null)
   // Quarter whose clock hit 0:00 while a play may still be running; its end waits for the play
   const [periodEndPending, setPeriodEndPending] = useState(null)
   // Immediate Actions boxes closed with their X; they come back when the situation changes
@@ -467,6 +470,7 @@ export default function LiveGamePage({ standalone = false }) {
           // Restore time of possession
           if (savedState.timeOfPossession) setTimeOfPossession(savedState.timeOfPossession)
           if (savedState.showOTRules) setShowOTRules(true)
+          if (savedState.closeCall && !savedState.closeCall.result) setCloseCall(savedState.closeCall)
           // Restore game log
           if (savedState.gameLog) setGameLog(savedState.gameLog)
           // Restore visibility settings
@@ -969,7 +973,8 @@ export default function LiveGamePage({ standalone = false }) {
   // score, or a game log entry such as a first down, turnover, penalty or missed kick) and nothing
   // is still in progress (TD/PAT, FG, kick, turnover review, flag).
   const periodEndSnapRef = useRef(null)
-  const playSignals = JSON.stringify([down, distance, possession, game?.home_score, game?.away_score, gameLog.length])
+  // (Close-call rulings aren't counted: after "Catch" or "Down by Contact" the down's result is still to come.)
+  const playSignals = JSON.stringify([down, distance, possession, game?.home_score, game?.away_score, gameLog.filter(e => e.type !== 'close-call').length])
   useEffect(() => {
     if (!periodEndPending) { periodEndSnapRef.current = null; return }
     // Clock put back on, or the quarter changed by hand: nothing to wait for
@@ -978,11 +983,11 @@ export default function LiveGamePage({ standalone = false }) {
       return
     }
     if (periodEndSnapRef.current === null) { periodEndSnapRef.current = playSignals; return }
-    const playInProgress = showTDPanel || pendingPAT || showPATAttempt || showFGAttempt || scoreCelebration ||
+    const playInProgress = (closeCall && !closeCall.result) || showTDPanel || pendingPAT || showPATAttempt || showFGAttempt || scoreCelebration ||
       pendingTurnoverReview || pendingFumble || showTurnoverOnDownsConfirm || flagDisplayStage > 0 ||
       ['kickoff', 'onside-kick', 'punt', 'fg-setup'].includes(gameStatus)
     if (playSignals !== periodEndSnapRef.current && !playInProgress) endPeriod()
-  }, [periodEndPending, playSignals, game?.quarter, game?.game_time, showTDPanel, pendingPAT, showPATAttempt, showFGAttempt, scoreCelebration, pendingTurnoverReview, pendingFumble, showTurnoverOnDownsConfirm, flagDisplayStage, gameStatus])
+  }, [periodEndPending, playSignals, game?.quarter, game?.game_time, closeCall, showTDPanel, pendingPAT, showPATAttempt, showFGAttempt, scoreCelebration, pendingTurnoverReview, pendingFumble, showTurnoverOnDownsConfirm, flagDisplayStage, gameStatus])
 
   // Down & distance from before the last first down (see recordPlayResult / applyPenalty)
   const firstDownUndoRef = useRef(null)
@@ -1135,6 +1140,7 @@ export default function LiveGamePage({ standalone = false }) {
       timeOfPossession,
       gameLog,
       showOTRules,
+      closeCall,
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -1152,7 +1158,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules, closeCall])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -1951,6 +1957,68 @@ export default function LiveGamePage({ standalone = false }) {
       }
       return { ...s, [team]: t }
     })
+  }
+
+  // First Down button: reset the downs, restart the play clock, show the overlay, count it
+  function awardFirstDown() {
+    resetDowns()
+    if (!playClockRunning) {
+      setPlayClock(40)
+      startPlayClock(40, true)
+    }
+    setShowDownOnly(false)
+    setShowFirstDown(true)
+    setTimeout(() => setShowFirstDown(false), 3000)
+    // Track first down (and 3rd/4th down conversion) in quick stats
+    recordPlayResult('firstDown')
+  }
+
+  // Close calls: the ball is dead while it's decided, so the clock stops
+  function startCloseCall(type) {
+    stopTimer()
+    setCloseCall({ type, result: null })
+  }
+
+  function resolveCloseCall(result) {
+    const call = closeCall
+    if (!call) return
+    addGameLogEntry('close-call', `Close call: ${CLOSE_CALLS[call.type].question} ${result === 'yes' ? CLOSE_CALLS[call.type].yes : CLOSE_CALLS[call.type].no}`, possession)
+    // Rulings with their own overlay (first down, incomplete, fumble, TD) clear the banner right away
+    let ownOverlay = false
+    if (call.type === 'firstDown') {
+      if (result === 'yes') {
+        awardFirstDown()
+        ownOverlay = true
+      } else {
+        // Short of the line: next down, and it's close, so "& inches" (4th down asks about a turnover on downs)
+        if (down < 4) {
+          nextDown()
+          setDistance(1)
+          setSpecialDistance('inches')
+        } else {
+          nextDown() // Shows the turnover on downs prompt
+          ownOverlay = true
+        }
+      }
+    } else if (call.type === 'touchdown' && result === 'yes') {
+      setShowTDPanel(possession || 'home')
+      ownOverlay = true
+    } else if (call.type === 'catch' && result === 'no') {
+      nextDown()
+      setShowIncomplete(true)
+      setTimeout(() => setShowIncomplete(false), 2000)
+      ownOverlay = true
+    } else if (call.type === 'fumble' && result === 'yes') {
+      setShowTurnover('fumble')
+      setPendingTurnoverReview('fumble')
+      ownOverlay = true
+    }
+    if (ownOverlay) {
+      setCloseCall(null)
+    } else {
+      setCloseCall({ type: call.type, result })
+      setTimeout(() => setCloseCall(prev => (prev && prev.type === call.type && prev.result === result ? null : prev)), 3000)
+    }
   }
 
   // Down & Distance functions
@@ -3359,6 +3427,7 @@ export default function LiveGamePage({ standalone = false }) {
               quickStats={quickStats}
               timeOfPossession={timeOfPossession}
               showOTRules={showOTRules}
+              closeCall={closeCall}
               showCoinToss={showCoinToss}
               coinTossData={coinToss}
             />
@@ -4192,21 +4261,25 @@ export default function LiveGamePage({ standalone = false }) {
               <Button 
                 className="w-full bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-white font-bold"
                 size="sm" 
-                onClick={() => {
-                  resetDowns()
-                  if (!playClockRunning) {
-                    setPlayClock(40)
-                    startPlayClock(40, true)
-                  }
-                  setShowDownOnly(false)
-                  setShowFirstDown(true)
-                  setTimeout(() => setShowFirstDown(false), 3000)
-                  // Track first down (and 3rd/4th down conversion) in quick stats
-                  recordPlayResult('firstDown')
-                }}
+                onClick={awardFirstDown}
               >
                 ⬇️ First Down!
               </Button>
+
+              {/* Close calls - put the question on the scoreboard while it's decided (not a replay review) */}
+              <div className="grid grid-cols-4 gap-2">
+                {CLOSE_CALL_TYPES.map(type => (
+                  <Button
+                    key={type}
+                    variant={closeCall?.type === type && !closeCall.result ? "default" : "outline"}
+                    size="sm"
+                    className={closeCall?.type === type && !closeCall.result ? "bg-cyan-600 hover:bg-cyan-700 text-white" : "border-cyan-400 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-50"}
+                    onClick={() => startCloseCall(type)}
+                  >
+                    🤔 {CLOSE_CALLS[type].question}
+                  </Button>
+                ))}
+              </div>
               
               {/* Other Actions - Grid */}
               <div className="grid grid-cols-4 gap-2">
@@ -4350,6 +4423,21 @@ export default function LiveGamePage({ standalone = false }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Close call being decided */}
+            {closeCall && !closeCall.result && (
+              <div className="relative pl-8 p-3 bg-cyan-50 dark:bg-cyan-900/30 rounded-lg space-y-2">
+                <BoxClose onClick={() => setCloseCall(null)} />
+                <p className="text-sm font-semibold text-cyan-800 dark:text-cyan-300">🤔 Close Call: {CLOSE_CALLS[closeCall.type].question}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button className="bg-green-600 hover:bg-green-700" onClick={() => resolveCloseCall('yes')}>
+                    ✓ {CLOSE_CALLS[closeCall.type].yes}
+                  </Button>
+                  <Button className="bg-red-600 hover:bg-red-700" onClick={() => resolveCloseCall('no')}>
+                    ✗ {CLOSE_CALLS[closeCall.type].no}
+                  </Button>
+                </div>
+              </div>
+            )}
             {/* Clock hit 0:00 - the end of the period waits for the current play */}
             {periodEndPending && (
               <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
@@ -8185,6 +8273,7 @@ export default function LiveGamePage({ standalone = false }) {
                           entry.type === 'penalty' ? 'bg-yellow-100 text-yellow-700' :
                           entry.type === 'down' ? 'bg-blue-100 text-blue-700' :
                           entry.type === 'kick' ? 'bg-orange-100 text-orange-700' :
+                          entry.type === 'close-call' ? 'bg-cyan-100 text-cyan-700' :
                           'bg-slate-100 text-slate-600'
                         }`}>{entry.type}</span>
                         {entry.team && (

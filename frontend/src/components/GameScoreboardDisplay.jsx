@@ -1,5 +1,6 @@
 import { Flag } from 'lucide-react'
 import { getOvertimeRules } from '@/lib/overtime'
+import { CLOSE_CALLS } from '@/lib/closeCalls'
 import { useState, useEffect, Component } from 'react'
 import { AnimatedScore } from '@/components/ui/animated-score'
 
@@ -110,6 +111,7 @@ export function GameScoreboardDisplay({
   quickStats,
   timeOfPossession,
   showOTRules,
+  closeCall,
   viewerCount,
   showCoinToss,
   coinTossData,
@@ -190,6 +192,7 @@ export function GameScoreboardDisplay({
   quickStats = quickStats ?? displayState?.quickStats ?? { home: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 }, away: { turnovers: 0, firstDowns: 0, penalties: 0, penaltyYards: 0, q1: 0, q2: 0, q3: 0, q4: 0, ot: 0 } }
   timeOfPossession = timeOfPossession ?? displayState?.timeOfPossession ?? { home: 0, away: 0 }
   showOTRules = showOTRules ?? displayState?.showOTRules ?? false
+  closeCall = closeCall ?? displayState?.closeCall ?? null
   const formatTOP = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
   const conversions = (team, key) => `${quickStats?.[team]?.[`${key}Conv`] || 0}/${quickStats?.[team]?.[`${key}Att`] || 0}`
   const showTeamStats = displayStats?.turnovers || displayStats?.firstDowns || displayStats?.penalties || displayStats?.thirdDowns || displayStats?.fourthDowns || displayStats?.timeOfPossession || displayStats?.customStats?.length > 0
@@ -766,6 +769,38 @@ export function GameScoreboardDisplay({
           </div>
         </div>
       )}
+
+      {/* Close Call - the question while it's being decided, then the ruling */}
+      {closeCall && CLOSE_CALLS[closeCall.type] && (() => {
+        const call = CLOSE_CALLS[closeCall.type]
+        const decided = closeCall.result === 'yes' || closeCall.result === 'no'
+        return (
+          <div
+            key={`close-call-${closeCall.type}-${closeCall.result || 'open'}`}
+            className={`rounded-lg px-4 py-3 mb-4 animate-bounce-in relative overflow-hidden ring-2 ${
+              !decided ? 'bg-gradient-to-r from-cyan-700 via-cyan-600 to-cyan-700 ring-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.5)]' :
+              closeCall.result === 'yes' ? 'bg-gradient-to-r from-green-600 via-green-500 to-green-600 ring-green-400 shadow-[0_0_25px_rgba(34,197,94,0.5)]' :
+              'bg-gradient-to-r from-red-600 via-red-500 to-red-600 ring-red-400 shadow-[0_0_25px_rgba(239,68,68,0.5)]'
+            }`}
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+            <div className="flex items-center justify-center gap-3 relative z-10">
+              {decided ? (
+                <span className="text-2xl font-black text-white tracking-wider uppercase animate-result-stamp" style={{ textShadow: '0 0 10px rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.5)' }}>
+                  {closeCall.result === 'yes' ? `✓ ${call.yes}` : `✗ ${call.no}`}
+                </span>
+              ) : (
+                <>
+                  <span className="text-xs font-black tracking-[0.2em] text-cyan-100">CLOSE CALL</span>
+                  <span className="text-2xl font-black text-white tracking-wider uppercase animate-pulse" style={{ textShadow: '0 0 10px rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.5)' }}>
+                    {call.question}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Game Status Overlay Bar */}
       {gameStatus && ['kickoff', 'onside-kick', 'punt', 'injury', 'injury-timeout', 'measurement', 'two-minute', 'weather', 'technical', 'end-quarter', 'halftime-show'].includes(gameStatus) && (
