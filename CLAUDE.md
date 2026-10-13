@@ -27,7 +27,7 @@ npm run build
 npm run lint     # eslint is installed, but the repo has no eslint config file
 ```
 
-There is no test suite in either backend or frontend.
+Tests: `scripts/run_tests.sh` runs the backend tests (`backend/tests`, pytest, a throwaway SQLite file; never the production database) and the frontend tests (`frontend/tests`, `node --test`) in throwaway containers.
 
 ## Deployment (Docker)
 
@@ -39,6 +39,8 @@ Production runs with `docker compose` on host `beelink2` from `~/gridironscore`,
 - `.env` (gitignored, see `.env.example`) holds `SECRET_KEY` and `GRIDIRON_PORT`.
 - Deploy a code change: `docker compose up -d --build`. Run a migration: back up `data/scoreboard.db` first, then `docker compose exec backend python migrate_xxx.py`.
 - Logs: `docker compose logs -f backend`.
+- Cron (user adam, alongside other projects' jobs): `scripts/backup_db.sh` daily at 03:30 (SQLite online backup into `data/daily-backups/`, 14 days kept; only that script's own files are removed) and `scripts/uptime_check.sh` every 5 minutes (push alert via `backend/send_alert.py` to league owners, or `ALERT_USERNAMES`, after 2 failed checks and when the site is back; log in `data/uptime/`).
+- The ESPN sync (League > Games > Sync with ESPN) backs up the database into `data/backups/` before applying.
 
 ## Architecture
 
@@ -50,7 +52,9 @@ Production runs with `docker compose` on host `beelink2` from `~/gridironscore`,
 - **Share codes:** Leagues, games, brackets, standalone games, and scoreboards each have an 8-char `share_code`, used for public share URLs and as the WebSocket room key.
 - **Real-time:** WebSocket rooms are named `"<type>:<SHARE_CODE_UPPER>"` (`game`, `bracket`, `scoreboard`, `league`). Endpoints are `/ws/{type}/{share_code}`. After a mutation, routes call `await manager.broadcast(room, {...})`. Game updates also broadcast to the parent league's room. Standalone games share the `game:` room namespace.
 - **Controller heartbeat:** The client that is scoring a game posts heartbeats. If they stop (10s timeout), viewers receive a "technical difficulties" broadcast. League games keep heartbeats in an in-memory dict (`game_heartbeats`, lost on restart), while standalone games persist `last_heartbeat` in the DB.
-- **Push notifications:** Score and status changes in `update_game` call `notifications.notify_league_followers` / `notify_game_followers`. `GameUpdate.notification` is a transient field that is not stored.
+- **Push notifications:** Game start/end in `update_game` call `notifications.notify_game_audience` (followers of the game, its league, or either team, once each). `GameUpdate.notification` is a transient field that is not stored.
+- **Standings:** team W/L and season standings are rebuilt from final scores (`recompute_team_records`, `recompute_season_stats`); finished seasons are never recomputed; preseason games count only toward preseason records.
+- **Co-scorers and chat:** co-scorer links (`co_scorer_links`) relay actions over the game WebSocket room to the scoring page, which applies them. Share-page chat and reactions are in memory only (`chat_rooms` in `main.py`).
 - Uploaded logos go to `backend/uploads/` and are served at `/uploads`.
 
 **Frontend** (`frontend/src`) uses React 18 + React Router + Tailwind, with shadcn-style Radix wrappers in `components/ui/`. The `@` alias points to `src/`.

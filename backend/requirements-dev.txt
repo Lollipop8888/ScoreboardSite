@@ -1,0 +1,3 @@
+# Test-only dependencies (scripts/run_tests.sh installs these in a throwaway container)
+pytest
+httpx
