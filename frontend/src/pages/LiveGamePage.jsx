@@ -42,11 +42,11 @@ const SCORING_PLAYS = [
 
 // Common NFL penalties
 const NFL_PENALTIES = [
-  { name: 'False Start', yards: 5, category: 'Pre-Snap' },
+  { name: 'False Start', yards: 5, category: 'Pre-Snap', deadBall: true },
   { name: 'Offside', yards: 5, category: 'Pre-Snap' },
-  { name: 'Encroachment', yards: 5, category: 'Pre-Snap' },
-  { name: 'Neutral Zone Infraction', yards: 5, category: 'Pre-Snap' },
-  { name: 'Delay of Game', yards: 5, category: 'Pre-Snap' },
+  { name: 'Encroachment', yards: 5, category: 'Pre-Snap', deadBall: true },
+  { name: 'Neutral Zone Infraction', yards: 5, category: 'Pre-Snap', deadBall: true },
+  { name: 'Delay of Game', yards: 5, category: 'Pre-Snap', deadBall: true },
   { name: 'Illegal Formation', yards: 5, category: 'Pre-Snap' },
   { name: 'Illegal Shift', yards: 5, category: 'Pre-Snap' },
   { name: 'Illegal Motion', yards: 5, category: 'Pre-Snap' },
@@ -71,7 +71,7 @@ const NFL_PENALTIES = [
   { name: 'Ineligible Man Downfield', yards: 5, category: 'Offense' },
   { name: 'Illegal Forward Pass', yards: 5, category: 'Offense', lossOfDown: true },
   { name: 'Too Many Men on Field', yards: 5, category: 'Pre-Snap' },
-  { name: 'Illegal Substitution', yards: 5, category: 'Pre-Snap' },
+  { name: 'Illegal Substitution', yards: 5, category: 'Pre-Snap', deadBall: true },
   { name: 'Clipping', yards: 15, category: 'Personal Foul' },
   { name: 'Chop Block', yards: 15, category: 'Personal Foul' },
   { name: 'Tripping', yards: 10, category: 'Personal Foul' },
@@ -1013,13 +1013,27 @@ export default function LiveGamePage({ standalone = false }) {
     if (playSignals !== periodEndSnapRef.current && !playInProgress) endPeriod()
   }, [periodEndPending, playSignals, game?.quarter, game?.game_time, closeCall, showTDPanel, pendingPAT, showPATAttempt, showFGAttempt, scoreCelebration, pendingTurnoverReview, pendingFumble, showTurnoverOnDownsConfirm, flagDisplayStage, gameStatus])
 
-  // Down & distance from before the last first down (see recordPlayResult / applyPenalty)
-  const firstDownUndoRef = useRef(null)
-  // When the current flag was thrown. A flag within FIRST_DOWN_FLAG_WINDOW_MS of a first down is on
-  // that same play (the next snap can't come that soon), so the penalty can wipe the first down out.
-  const flagThrownAtRef = useRef(null)
-  const FIRST_DOWN_FLAG_WINDOW_MS = 25000
-  useEffect(() => { firstDownUndoRef.current = null }, [possession])
+  // Down & distance before the last play's result (first down, or next down / incomplete / out of
+  // bounds), so an accepted foul on that play can replay it. See recordPlayResult / applyPenalty.
+  const playUndoRef = useRef(null) // { team, down, distance, specialDistance, result, at }
+  useEffect(() => { playUndoRef.current = null }, [possession])
+  // Flag on the field: the play it may wipe out, and whether to replay it (default: the flag came
+  // within a play clock of that result, so it's on that play). Shown as a choice in the flag panel.
+  const [flagUndo, setFlagUndo] = useState(null)
+  const [replayFlaggedPlay, setReplayFlaggedPlay] = useState(false)
+  const REPLAY_DEFAULT_WINDOW_MS = 40000
+  function noteFlagThrown() {
+    const undo = playUndoRef.current
+    const usable = undo && undo.team === possession
+    setFlagUndo(usable ? undo : null)
+    setReplayFlaggedPlay(!!usable && Date.now() - undo.at <= REPLAY_DEFAULT_WINDOW_MS)
+  }
+  // Dead-ball fouls (false start, encroachment, ...) stop the next play before the snap, so they
+  // never replay the last one. Live-ball pre-snap fouls like offside can still replay it.
+  const flaggedPreSnapOnly = selectedPenalties.length > 0 && selectedPenalties.every(p => p.penalty.deadBall)
+  // "3rd & 4", "1st & Goal"
+  const formatDownDistance = (d, dist, special) =>
+    `${['1st', '2nd', '3rd', '4th'][d - 1] || d} & ${special === 'goal' ? 'Goal' : special === 'inches' ? 'Inches' : dist}`
 
   // The game clock tick runs from a timeout chain, so it reads possession from a ref
   const possessionRef = useRef(possession)
@@ -2023,8 +2037,10 @@ export default function LiveGamePage({ standalone = false }) {
     if (team !== 'home' && team !== 'away') return
     const playDown = down
     if (result !== 'penaltyFirstDown' && driveRef.current) driveRef.current.plays += 1
-    // Remember the down & distance before a first down, in case a penalty on the play takes it away
-    firstDownUndoRef.current = result === 'firstDown' ? { team, down: playDown, distance, specialDistance, at: Date.now() } : null
+    // Remember the down & distance before this play, in case an accepted foul on it means a replay
+    playUndoRef.current = (result === 'firstDown' || result === 'failed')
+      ? { team, down: playDown, distance, specialDistance, result, at: Date.now() }
+      : null
     // Game log: first downs (noting 3rd/4th down conversions), and anything given a description
     if (result === 'firstDown') {
       addGameLogEntry('down', playDown >= 3 ? `First down (${playDown === 3 ? '3rd' : '4th'} down conversion)` : 'First down', team)
@@ -2491,7 +2507,7 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Stage 1: Show just "FLAG" text on display
   function showFlagStage1() {
-    if (flagDisplayStage === 0) flagThrownAtRef.current = Date.now()
+    if (flagDisplayStage === 0) noteFlagThrown()
     setFlagDisplayStage(1)
     // Hide play clock when flag is thrown (but don't stop game clock)
     setShowPlayClock(false)
@@ -2540,33 +2556,31 @@ export default function LiveGamePage({ standalone = false }) {
     const penaltyOnOffense = !!sp && ((sp.team === 'home' && possession === 'home') || 
                                       (sp.team === 'away' && possession === 'away'))
 
-    // An offensive penalty on a play that gained a first down wipes it out: go back to the
-    // down & distance before the play, then apply the penalty from there
+    // Replay the flagged play: back to the down & distance before it, then enforce the foul from there
     let baseDown = down
     let baseDistance = distance
     let baseSpecialDistance = specialDistance
-    const undo = firstDownUndoRef.current
-    const flagOnFirstDownPlay = undo && Math.abs((flagThrownAtRef.current ?? Date.now()) - undo.at) <= FIRST_DOWN_FLAG_WINDOW_MS
-    if (penaltyOnOffense && undo && undo.team === possession && down === 1 && flagOnFirstDownPlay) {
+    const undo = flagUndo
+    if (sp && undo && replayFlaggedPlay && !flaggedPreSnapOnly && undo.team === possession) {
       baseDown = undo.down
       baseDistance = undo.distance
       baseSpecialDistance = undo.specialDistance
       setDown(baseDown)
       setDistance(baseDistance)
       setSpecialDistance(baseSpecialDistance)
-      // The first down (and any 3rd/4th down conversion) didn't happen
+      // Take back what the play counted: a first down, and any 3rd/4th down attempt (and conversion)
       setQuickStats(s => {
         const t = { ...s[undo.team] }
-        t.firstDowns = Math.max(0, (t.firstDowns || 0) - 1)
+        if (undo.result === 'firstDown') t.firstDowns = Math.max(0, (t.firstDowns || 0) - 1)
         if (undo.down === 3 || undo.down === 4) {
           const key = undo.down === 3 ? 'thirdDown' : 'fourthDown'
           t[`${key}Att`] = Math.max(0, (t[`${key}Att`] || 0) - 1)
-          t[`${key}Conv`] = Math.max(0, (t[`${key}Conv`] || 0) - 1)
+          if (undo.result === 'firstDown') t[`${key}Conv`] = Math.max(0, (t[`${key}Conv`] || 0) - 1)
         }
         return { ...s, [undo.team]: t }
       })
-      addGameLogEntry('down', 'First down wiped out by penalty', undo.team)
-      firstDownUndoRef.current = null
+      addGameLogEntry('down', `Play wiped out by penalty - replay ${formatDownDistance(undo.down, undo.distance, undo.specialDistance)}`, undo.team)
+      playUndoRef.current = null
     }
 
     // A defensive foul with an automatic first down always gives one, from any of the selected
@@ -2611,7 +2625,7 @@ export default function LiveGamePage({ standalone = false }) {
         setSpecialDistance(null)
       } else if (!penaltyOnOffense && penalty.yards > 0) {
         // Defensive penalty - subtract yards from distance
-        const newDist = distance - penalty.yards
+        const newDist = baseDistance - penalty.yards
         if (newDist <= 0) {
           // Penalty yards reach the line to gain: first down
           recordPlayResult('penaltyFirstDown')
@@ -2641,7 +2655,8 @@ export default function LiveGamePage({ standalone = false }) {
 
   function hideFlagFromDisplay() {
     // Set all flag-related state to cleared values
-    flagThrownAtRef.current = null
+    setFlagUndo(null)
+    setReplayFlaggedPlay(false)
     setFlagDisplayStage(0)
     setDisplayedPenalties([])
     setSelectedPenalties([])
@@ -2687,7 +2702,7 @@ export default function LiveGamePage({ standalone = false }) {
 
   // Show flag with no team (just "FLAG" display with optional custom text)
   function showNoFlagPenalty(text = '') {
-    if (flagDisplayStage === 0) flagThrownAtRef.current = Date.now()
+    if (flagDisplayStage === 0) noteFlagThrown()
     setFlagDisplayStage(1)
     setDisplayedPenalties([])
     setSelectedPenalties([])
@@ -6423,6 +6438,34 @@ export default function LiveGamePage({ standalone = false }) {
           </CardHeader>
           
           <CardContent className="space-y-4">
+              {/* Flag on a play whose result was already entered: replay it, or let it stand */}
+              {flagDisplayStage > 0 && flagUndo && flaggedPreSnapOnly && (
+                <p className="text-xs text-slate-500">Dead-ball foul before the snap: enforced from the current down ({formatDownDistance(down, distance, specialDistance)}).</p>
+              )}
+              {flagDisplayStage > 0 && flagUndo && !flaggedPreSnapOnly && (
+                <div className="rounded-lg border border-yellow-300 dark:border-yellow-700 p-2 space-y-1.5">
+                  <p className="text-xs font-semibold text-yellow-800 dark:text-yellow-300">Penalty on the last play?</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      size="sm"
+                      variant={replayFlaggedPlay ? 'default' : 'outline'}
+                      className={replayFlaggedPlay ? 'bg-yellow-600 hover:bg-yellow-700 text-white' : ''}
+                      onClick={() => setReplayFlaggedPlay(true)}
+                    >
+                      ↩️ Replay {formatDownDistance(flagUndo.down, flagUndo.distance, flagUndo.specialDistance)}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={!replayFlaggedPlay ? 'default' : 'outline'}
+                      className={!replayFlaggedPlay ? 'bg-slate-700 hover:bg-slate-800 text-white' : ''}
+                      onClick={() => setReplayFlaggedPlay(false)}
+                    >
+                      Play stands ({formatDownDistance(down, distance, specialDistance)})
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-slate-500">The penalty is enforced from the down you pick when you press Apply.</p>
+                </div>
+              )}
               {/* Three-Stage Flag Buttons */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 <Button
