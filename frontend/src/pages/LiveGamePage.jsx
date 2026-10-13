@@ -276,6 +276,12 @@ export default function LiveGamePage({ standalone = false }) {
   const [breakStartedAt, setBreakStartedAt] = useState(null) // when the current commercial break started (break card clock)
   // Close call being decided on the field: { type: 'firstDown' | 'touchdown' | 'catch' | 'fumble', result: null | 'yes' | 'no' }
   const [closeCall, setCloseCall] = useState(null)
+  // Coin toss: which toss ('Pregame' or 'OT') is finished and put away, so its boxes don't come back
+  const [coinTossDoneFor, setCoinTossDoneFor] = useState(null)
+  // The coin toss being decided right now, if any (pregame or the start of overtime)
+  const tossPeriod = game?.quarter === 'OT' ? 'OT' : (game?.quarter === 'Pregame' || gameStatus === 'pregame') ? 'Pregame' : null
+  const coinTossOpen = !!tossPeriod && coinTossDoneFor !== tossPeriod
+  const finishCoinToss = () => { if (tossPeriod) setCoinTossDoneFor(tossPeriod) }
   // Quarter whose clock hit 0:00 while a play may still be running; its end waits for the play
   const [periodEndPending, setPeriodEndPending] = useState(null)
   // Immediate Actions boxes closed with their X; they come back when the situation changes
@@ -490,6 +496,7 @@ export default function LiveGamePage({ standalone = false }) {
           if (savedState.gameStatus) setGameStatus(savedState.gameStatus)
           // Restore coin toss
           if (savedState.coinToss) setCoinToss(savedState.coinToss)
+          if (savedState.coinTossDoneFor) setCoinTossDoneFor(savedState.coinTossDoneFor)
           // Restore time of possession
           if (savedState.timeOfPossession) setTimeOfPossession(savedState.timeOfPossession)
           if (savedState.showOTRules) setShowOTRules(true)
@@ -1077,7 +1084,11 @@ export default function LiveGamePage({ standalone = false }) {
     if (game.quarter === 'Halftime' || game.quarter?.startsWith('Final')) updateExtras({ showScoringSummary: true })
     else if (game.quarter !== 'Pregame') updateExtras({ showScoringSummary: false })
     // Going into overtime: put the OT rules up on the scoreboard
-    if (game.quarter === 'OT' && !last.quarter?.startsWith('OT')) setShowOTRules(true)
+    if (game.quarter === 'OT' && !last.quarter?.startsWith('OT')) {
+      setShowOTRules(true)
+      setCoinToss({ winner: null, choice: null }) // overtime gets its own coin toss
+      setShowCoinToss(false)
+    }
   }, [game?.id, game?.quarter])
 
   // Commercial break clock starts when the break does
@@ -1251,6 +1262,7 @@ export default function LiveGamePage({ standalone = false }) {
       ballOn,
       currentDrive: driveRef.current, // so a page reload doesn't restart the drive
       breakStartedAt,
+      coinTossDoneFor,
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -1268,7 +1280,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules, closeCall, scoreboardExtras, driveSummary, scoringRun, breakStartedAt])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules, closeCall, scoreboardExtras, driveSummary, scoringRun, breakStartedAt, coinTossDoneFor])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -1669,6 +1681,8 @@ export default function LiveGamePage({ standalone = false }) {
     setGameStatus('pregame')
     setPenalties([])
     setDisplayedPenalties([])
+    setCoinToss({ winner: null, choice: null })
+    setCoinTossDoneFor(null)
     stopTimer()
   }
 
@@ -1839,6 +1853,7 @@ export default function LiveGamePage({ standalone = false }) {
     timerRunningRef.current = true
     setTimerRunning(true)
     setShowOTRules(false) // Play is starting; take the OT rules down
+    if (coinToss.winner && coinToss.choice) finishCoinToss() // and put the finished coin toss away
     
     // Save timer state to backend for persistence
     const currentSeconds = parseTime(game?.game_time || '15:00')
@@ -4679,9 +4694,9 @@ export default function LiveGamePage({ standalone = false }) {
               )
             })()}
             {/* Coin Toss - Pregame or OT */}
-            {!dismissedBoxes.includes('coinToss') && (game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && !coinToss.winner && (
+            {coinTossOpen && !coinToss.winner && (
               <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
-                <BoxClose onClick={() => dismissBox('coinToss')} />
+                <BoxClose onClick={finishCoinToss} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">🪙 Coin Toss</p>
                 <div className="space-y-2">
                   <p className="text-xs text-amber-700 dark:text-amber-400">Who won the toss?</p>
@@ -4708,9 +4723,9 @@ export default function LiveGamePage({ standalone = false }) {
             )}
 
             {/* Coin Toss Choice - After winner selected */}
-            {!dismissedBoxes.includes('coinToss') && (game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && coinToss.winner && !coinToss.choice && (
+            {coinTossOpen && coinToss.winner && !coinToss.choice && (
               <div className="relative pl-8 p-3 bg-amber-100 dark:bg-amber-900/30 rounded-lg space-y-2">
-                <BoxClose onClick={() => dismissBox('coinToss')} />
+                <BoxClose onClick={finishCoinToss} />
                 <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                   🪙 {coinToss.winner === 'home' ? game.home_team?.abbreviation : game.away_team?.abbreviation} won - Election?
                 </p>
@@ -4761,7 +4776,7 @@ export default function LiveGamePage({ standalone = false }) {
             )}
 
             {/* Coin Toss Complete - Show result */}
-            {(game.quarter === 'Pregame' || gameStatus === 'pregame' || game.quarter === 'OT') && coinToss.winner && coinToss.choice && (
+            {coinTossOpen && coinToss.winner && coinToss.choice && (
               <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold text-green-800 dark:text-green-300">
@@ -4781,7 +4796,8 @@ export default function LiveGamePage({ standalone = false }) {
                       variant="ghost"
                       className="h-7 text-xs text-slate-400 hover:text-red-500"
                       onClick={() => {
-                        setCoinToss({ winner: null, choice: null })
+                        // Toss is done: put it away for this period (keeps the result)
+                        finishCoinToss()
                         setShowCoinToss(false)
                       }}
                     >
