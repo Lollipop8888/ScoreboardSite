@@ -2086,6 +2086,7 @@ export default function LiveGamePage({ standalone = false }) {
   function moveBall(yards) {
     const team = possession
     if (team !== 'home' && team !== 'away') return
+    if (!scoreboardExtras.showBallSpot) updateExtras({ showBallSpot: true }) // using the spot means showing it
     const newSpot = advanceSpot(ballOn, team, yards)
     const gained = (newSpot - ballOn) * (team === 'home' ? 1 : -1)
     setBallOn(newSpot)
@@ -4415,7 +4416,7 @@ export default function LiveGamePage({ standalone = false }) {
                   <div className="flex flex-wrap items-center gap-1">
                     <select
                       value={side}
-                      onChange={(e) => setBallOn(ownYardLineToSpot(e.target.value, yardLine))}
+                      onChange={(e) => { setBallOn(ownYardLineToSpot(e.target.value, yardLine)); updateExtras({ showBallSpot: true }) }}
                       className="h-8 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-1 text-sm"
                     >
                       <option value="away">{awayAbbr}</option>
@@ -4429,6 +4430,7 @@ export default function LiveGamePage({ standalone = false }) {
                       onChange={(e) => {
                         const y = Math.min(50, Math.max(1, parseInt(e.target.value) || 1))
                         setBallOn(ownYardLineToSpot(side, y))
+                        updateExtras({ showBallSpot: true })
                       }}
                       className="h-8 w-16 text-sm"
                     />
@@ -7489,6 +7491,7 @@ export default function LiveGamePage({ standalone = false }) {
             {/* On/off extras */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
               {[
+                { key: 'showBallSpot', label: 'Ball spot and field strip (needs possession and D&D showing)' },
                 { key: 'showDriveSummaries', label: 'Drive summaries on change of possession' },
                 { key: 'showScoringSummary', label: 'Scoring summary (auto at halftime and final)' },
                 { key: 'showScoringRuns', label: 'Scoring runs ("17 straight points")' },
