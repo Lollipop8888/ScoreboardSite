@@ -1125,9 +1125,53 @@ export default function LiveGamePage({ standalone = false }) {
       : null
   }, [possession])
 
+  // Undo: a history of the game state each time it settles after a change (score, down & distance,
+  // possession, ball spot, timeouts, quick stats, game log, status). Undo steps back one entry, so it
+  // works for every button and keybind. The clocks and time of possession aren't part of it.
+  const undoHistoryRef = useRef([])
+  const [undoCount, setUndoCount] = useState(0)
+  const undoSnapshot = game ? {
+    home_score: game.home_score, away_score: game.away_score, down, distance, specialDistance, possession,
+    ballOn, homeTimeouts, awayTimeouts, quickStats, gameLog, scoringRun, gameStatus, pendingPAT, kickoffPending,
+  } : null
+  const undoKey = undoSnapshot ? JSON.stringify(undoSnapshot) : null
+  useEffect(() => {
+    // A score's celebration delays the score itself; wait so the whole score is one undo step
+    if (!undoKey || scoreCelebration) return
+    const t = setTimeout(() => {
+      const history = undoHistoryRef.current
+      if (history.length && history[history.length - 1].key === undoKey) return
+      history.push({ key: undoKey, state: JSON.parse(undoKey) })
+      if (history.length > 40) history.shift()
+      setUndoCount(history.length - 1)
+    }, 600)
+    return () => clearTimeout(t)
+  }, [undoKey, !!scoreCelebration])
+  function undoLastChange() {
+    const history = undoHistoryRef.current
+    if (history.length < 2) return
+    history.pop()
+    const prev = history[history.length - 1].state
+    setUndoCount(history.length - 1)
+    if (prev.home_score !== game.home_score || prev.away_score !== game.away_score) {
+      suppressScoreEffectRef.current = true
+      updateGame({ home_score: prev.home_score, away_score: prev.away_score })
+    }
+    setDown(prev.down); setDistance(prev.distance); setSpecialDistance(prev.specialDistance)
+    setPossession(prev.possession); setBallOn(prev.ballOn)
+    setHomeTimeouts(prev.homeTimeouts); setAwayTimeouts(prev.awayTimeouts)
+    setQuickStats(prev.quickStats); setGameLog(prev.gameLog); setScoringRun(prev.scoringRun)
+    setGameStatus(prev.gameStatus)
+    setPendingPAT(prev.pendingPAT ?? null); setKickoffPending(!!prev.kickoffPending)
+    // Overlays from the undone action shouldn't linger
+    setShowFirstDown(false); setShowIncomplete(false); setShowTurnover(null); setPendingTurnoverReview(null)
+    setPendingFumble(false); setScoreCelebration(null); setCloseCall(null)
+  }
+
   // Points by quarter follow the score itself, so every way of scoring (TD, PAT, 2PT, FG, safety,
   // manual +/-) is counted, and corrections take points back off.
   const lastScoresRef = useRef(null)
+  const suppressScoreEffectRef = useRef(false) // an undo restores quick stats itself
   useEffect(() => {
     if (!game) return
     const scores = { id: game.id, home: game.home_score || 0, away: game.away_score || 0 }
@@ -1135,6 +1179,7 @@ export default function LiveGamePage({ standalone = false }) {
     lastScoresRef.current = scores
     // First load (stats were restored from the saved state) or a different game: nothing to add
     if (!last || last.id !== scores.id) return
+    if (suppressScoreEffectRef.current) { suppressScoreEffectRef.current = false; return }
 
     const qtr = game.quarter || 'Q1'
     const qKey = qtr.startsWith('OT') ? 'ot' : qtr.toLowerCase()
@@ -4472,6 +4517,17 @@ export default function LiveGamePage({ standalone = false }) {
 
             {/* Quick Actions */}
             <div className="pt-2 border-t space-y-2">
+              {/* Undo the last change (score, downs, stats, log...) */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full border-slate-400"
+                disabled={undoCount === 0}
+                onClick={undoLastChange}
+              >
+                ↩️ Undo last change{undoCount > 0 ? ` (${undoCount})` : ''}
+              </Button>
+
               {/* First Down - Full Width */}
               <Button 
                 className="w-full bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-white font-bold"
@@ -7895,6 +7951,21 @@ export default function LiveGamePage({ standalone = false }) {
             <p className="text-lg text-slate-600 mt-1">
               {game.away_team.name} {game.away_score} - {game.home_score} {game.home_team.name}
             </p>
+            <Button
+              variant="outline"
+              className="mt-4"
+              onClick={async () => {
+                if (!confirm('Reopen this game? It goes back to live (and out of the standings until it is final again).')) return
+                // Back to the quarter it ended in (from the game log), otherwise Q4
+                const lastQuarter = [...gameLog].reverse().map(e => e.quarter)
+                  .find(q => q && !q.startsWith('Final') && q !== 'Halftime' && q !== 'Pregame') || 'Q4'
+                await updateGame({ status: 'live', quarter: lastQuarter })
+                setGameStatus(null)
+                addGameLogEntry('quarter', 'Game reopened')
+              }}
+            >
+              ↩️ Reopen Game
+            </Button>
           </CardContent>
         </Card>
       )}
