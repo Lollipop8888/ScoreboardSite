@@ -389,6 +389,36 @@
   100% { transform: translate(-50%, -76px) scale(0.5) rotate(-360deg); opacity: 0; }
 }
 
+@keyframes lead-glow {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 28px 6px var(--glow); }
+}
+
+.animate-lead-glow {
+  animation: lead-glow 1.3s ease-in-out 3;
+}
+
+@keyframes ticker {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.animate-ticker {
+  animation: ticker linear infinite;
+}
+
+/* Scoreboard size for TVs: only on wide screens, so phones are unaffected */
+@media (min-width: 1024px) {
+  .sb-size-large { zoom: 1.25; }
+  .sb-size-xl { zoom: 1.5; }
+}
+
+/* Light scoreboard theme: darker versions of colors made for the dark board */
+.sb-theme-light .sb-clock.text-yellow-400 { color: #a16207; }
+.sb-theme-light .sb-clock.text-orange-400 { color: #c2410c; }
+.sb-theme-light .text-emerald-400 { color: #047857; }
+.sb-theme-light .sb-spot { color: #0f172a; }
+
 .animate-fg-ball-through {
   animation: fg-ball-through 1.2s ease-out infinite;
 }

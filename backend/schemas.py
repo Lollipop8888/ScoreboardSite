@@ -402,6 +402,7 @@ class GameWithTeams(BaseModel):
     four_point_fg_enabled: Optional[bool] = False  # From league settings
     four_point_fg_distance: Optional[int] = 50  # From league settings
     ot_format: Optional[str] = "nfl"  # From league settings (game_defaults.ot_format)
+    touchback_yard: Optional[int] = 25  # From league settings (game_defaults.touchback_yard), kickoff touchbacks
     created_at: datetime
     updated_at: datetime
 

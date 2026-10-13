@@ -1,7 +1,8 @@
 import { Flag } from 'lucide-react'
 import { getOvertimeRules } from '@/lib/overtime'
 import { CLOSE_CALLS } from '@/lib/closeCalls'
-import { useState, useEffect, Component } from 'react'
+import { spotLabel, spotToFieldPercent } from '@/lib/fieldPosition'
+import { useState, useEffect, useRef, Component } from 'react'
 import { AnimatedScore } from '@/components/ui/animated-score'
 
 // Error boundary to prevent white screens
@@ -112,6 +113,7 @@ export function GameScoreboardDisplay({
   timeOfPossession,
   showOTRules,
   closeCall,
+  extras, // scoring page preview: { scoreboardExtras, driveSummary, scoringRun, ballOn, gameLog }
   viewerCount,
   showCoinToss,
   coinTossData,
@@ -193,12 +195,54 @@ export function GameScoreboardDisplay({
   timeOfPossession = timeOfPossession ?? displayState?.timeOfPossession ?? { home: 0, away: 0 }
   showOTRules = showOTRules ?? displayState?.showOTRules ?? false
   closeCall = closeCall ?? displayState?.closeCall ?? null
+  // Scoreboard extras (ball spot, drives, scoring summary, runs, sponsors, other scores, venue, theme, size)
+  const ex = { ...(displayState || {}), ...(extras || {}) }
+  const sbx = ex.scoreboardExtras || {}
+  const ballSpot = ex.ballOn ?? game.ball_on ?? 25
+  const scoringPlays = (ex.gameLog || []).filter(e => e.type === 'score' && e.points)
   const formatTOP = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
   const conversions = (team, key) => `${quickStats?.[team]?.[`${key}Conv`] || 0}/${quickStats?.[team]?.[`${key}Att`] || 0}`
   const showTeamStats = displayStats?.turnovers || displayStats?.firstDowns || displayStats?.penalties || displayStats?.thirdDowns || displayStats?.fourthDowns || displayStats?.timeOfPossession || displayStats?.customStats?.length > 0
 
   // Delayed D&D space removal - after 3 seconds of being hidden, remove the space entirely
   const [removeDownDistanceSpace, setRemoveDownDistanceSpace] = useState(false)
+
+  // Lead change: the new leader's score glows for a few seconds
+  const leader = game.home_score > game.away_score ? 'home' : game.away_score > game.home_score ? 'away' : null
+  const lastLeaderRef = useRef(leader)
+  const [leadGlow, setLeadGlow] = useState(null)
+  useEffect(() => {
+    const last = lastLeaderRef.current
+    lastLeaderRef.current = leader
+    if (!leader || leader === last) return
+    setLeadGlow(leader)
+    const t = setTimeout(() => setLeadGlow(null), 4000)
+    return () => clearTimeout(t)
+  }, [leader])
+
+  // Sponsors rotate
+  const sponsorItems = (sbx.sponsors?.items || []).filter(i => i.text?.trim() || i.imageUrl?.trim())
+  const [sponsorIndex, setSponsorIndex] = useState(0)
+  useEffect(() => {
+    if (!sbx.sponsors?.show || sponsorItems.length < 2) return
+    const t = setInterval(() => setSponsorIndex(i => i + 1), (sbx.sponsors.interval || 8) * 1000)
+    return () => clearInterval(t)
+  }, [sbx.sponsors?.show, sponsorItems.length, sbx.sponsors?.interval])
+
+  // Other scores: the league's other games in the same week, refreshed every minute
+  const [otherGames, setOtherGames] = useState([])
+  useEffect(() => {
+    if (!sbx.showOtherScores || !game.league_id) { setOtherGames([]); return }
+    let cancelled = false
+    const load = () => fetch(`/api/leagues/${game.league_id}/games`).then(r => r.json()).then(all => {
+      if (cancelled || !Array.isArray(all)) return
+      setOtherGames(all.filter(g => g.id !== game.id && g.season_id === game.season_id &&
+        g.game_unit === game.game_unit && (g.game_unit_type || 1) === (game.game_unit_type || 1)))
+    }).catch(() => {})
+    load()
+    const t = setInterval(load, 60000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [sbx.showOtherScores, game.league_id, game.id, game.season_id, game.game_unit, game.game_unit_type])
   
   useEffect(() => {
     if (hideDownDistance) {
@@ -404,8 +448,15 @@ export function GameScoreboardDisplay({
 
   return (
     <ScoreboardErrorBoundary>
-    <div className="flex flex-col overflow-visible">
-      <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 rounded-xl p-6 text-white relative shadow-2xl border border-slate-800/50 overflow-visible">
+    <div className={`flex flex-col overflow-visible sb-size-${sbx.size || 'normal'}`}>
+      <div
+        className={`rounded-xl p-6 relative shadow-2xl overflow-visible ${
+          sbx.theme === 'light' ? 'sb-theme-light bg-gradient-to-br from-white via-slate-50 to-slate-100 text-slate-900 border border-slate-200'
+          : sbx.theme === 'team' ? 'text-white border border-white/10'
+          : 'bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white border border-slate-800/50'
+        }`}
+        style={sbx.theme === 'team' ? { background: `linear-gradient(110deg, ${awayTeam.color}cc 0%, #0f172a 38%, #0f172a 62%, ${homeTeam.color}cc 100%)` } : undefined}
+      >
         {/* Subtle ambient background glow */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-24 -left-24 w-48 h-48 bg-blue-500/5 rounded-full blur-3xl"></div>
@@ -420,6 +471,29 @@ export function GameScoreboardDisplay({
           </p>
         </div>
       )}
+
+      {/* Venue / weather line */}
+      {sbx.venue?.show && sbx.venue.text?.trim() && (
+        <p className={`text-center text-xs font-medium text-slate-400 tracking-wide ${showDisplayTitle && displayTitle ? '-mt-2 mb-3' : '-mt-2 mb-3'}`}>{sbx.venue.text}</p>
+      )}
+
+      {/* Drive summary when possession changes */}
+      {ex.driveSummary && (() => {
+        const d = ex.driveSummary
+        const team = d.team === 'home' ? homeTeam : awayTeam
+        const parts = [`${d.plays} play${d.plays === 1 ? '' : 's'}`]
+        if (d.yards !== null && d.yards !== undefined) parts.push(`${d.yards} yd${Math.abs(d.yards) === 1 ? '' : 's'}`)
+        parts.push(`${Math.floor(d.seconds / 60)}:${String(d.seconds % 60).padStart(2, '0')}`)
+        return (
+          <div key={`drive-${d.id}`} className="rounded-lg px-4 py-2.5 mb-4 animate-bounce-in relative overflow-hidden ring-1 ring-white/20 text-white" style={{ background: `linear-gradient(90deg, ${team.color}, ${team.color2 || team.color})` }}>
+            <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 relative z-10 text-center">
+              <span className="text-xs font-black tracking-[0.2em]">{team.abbreviation} DRIVE</span>
+              <span className="text-base font-bold">{parts.join(' · ')}</span>
+              {d.result && <span className="text-base font-black uppercase">→ {d.result}</span>}
+            </div>
+          </div>
+        )
+      })()}
       
       {/* TOUCHDOWN Celebration Overlay */}
       {scoreCelebration?.type === 'touchdown' && (
@@ -1354,6 +1428,34 @@ export function GameScoreboardDisplay({
       )}
       </div>
       
+      {/* Ball spot and field strip */}
+      {sbx.showBallSpot && (possession === 'home' || possession === 'away') && !hideDownDistance && (() => {
+        const offense = possession === 'home' ? homeTeam : awayTeam
+        const dir = possession === 'home' ? 1 : -1
+        const lineToGain = specialDistance === 'goal' ? null : Math.min(100, Math.max(0, ballSpot + dir * (distance || 10)))
+        return (
+          <div className="mb-4 -mt-2">
+            <p className="text-center text-xs font-semibold text-slate-400 mb-1.5">
+              {offense.abbreviation} ball on <span className="text-sm font-bold sb-spot">{spotLabel(ballSpot, homeTeam.abbreviation, awayTeam.abbreviation)}</span>
+            </p>
+            <div className="flex h-5 rounded-md overflow-hidden ring-1 ring-white/10">
+              <div className="w-[8%] flex items-center justify-center text-[9px] font-black text-white/90" style={{ backgroundColor: awayTeam.color }}>{awayTeam.abbreviation}</div>
+              <div className="relative flex-1 bg-gradient-to-b from-green-700 to-green-800">
+                {[10, 20, 30, 40, 50, 60, 70, 80, 90].map(y => (
+                  <div key={y} className={`absolute top-0 bottom-0 w-px ${y === 50 ? 'bg-white/50' : 'bg-white/20'}`} style={{ left: `${y}%` }} />
+                ))}
+                {lineToGain !== null && (
+                  <div className="absolute top-0 bottom-0 w-1 -ml-0.5 bg-yellow-400 shadow-[0_0_6px_rgba(250,204,21,0.8)]" style={{ left: `${spotToFieldPercent(lineToGain)}%` }} />
+                )}
+                <div className="absolute top-0 bottom-0 w-1 -ml-0.5 bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.8)]" style={{ left: `${spotToFieldPercent(ballSpot)}%` }} />
+                <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 text-[11px] leading-none" style={{ left: `${spotToFieldPercent(ballSpot)}%` }}>🏈</div>
+              </div>
+              <div className="w-[8%] flex items-center justify-center text-[9px] font-black text-white/90" style={{ backgroundColor: homeTeam.color }}>{homeTeam.abbreviation}</div>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Teams and Scores */}
       <div className="grid grid-cols-3 gap-1 sm:gap-4 items-center overflow-visible [&>*]:min-w-0">
         {/* Away Team (Left) - with extra info on left side */}
@@ -1415,7 +1517,7 @@ export function GameScoreboardDisplay({
               </div>
             )}
             {!hideScore && (
-              <div className="mt-2 py-2 overflow-visible transition-all duration-500">
+              <div className={`mt-2 py-2 overflow-visible transition-all duration-500 rounded-xl ${leadGlow === 'away' ? 'animate-lead-glow' : ''}`} style={{ '--glow': awayTeam.color }}>
                 <AnimatedScore score={game.away_score} color={awayTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
               </div>
             )}
@@ -1535,7 +1637,7 @@ export function GameScoreboardDisplay({
               })()}
               <div className={`flex items-center justify-center gap-1.5 sm:gap-3 transition-all duration-300 ${hideClock ? 'scale-0 opacity-0 h-0' : 'scale-100 opacity-100'}`}>
                 <span className="text-slate-500 text-sm sm:text-lg font-bold uppercase tracking-wider">{game.quarter}</span>
-                <span className={`text-3xl sm:text-4xl font-mono font-black tracking-tight ${
+                <span className={`sb-clock text-3xl sm:text-4xl font-mono font-black tracking-tight ${
                   game.game_time === '0:00' 
                     ? 'text-red-500 drop-shadow-[0_0_12px_rgba(239,68,68,0.6)] animate-pulse' 
                     : (['Q2', 'Q4', 'OT', 'OT1', 'OT2', 'OT3'].includes(game.quarter) && 
@@ -1606,7 +1708,7 @@ export function GameScoreboardDisplay({
               </div>
             )}
             {!hideScore && (
-              <div className="mt-2 py-2 overflow-visible transition-all duration-500">
+              <div className={`mt-2 py-2 overflow-visible transition-all duration-500 rounded-xl ${leadGlow === 'home' ? 'animate-lead-glow' : ''}`} style={{ '--glow': homeTeam.color }}>
                 <AnimatedScore score={game.home_score} color={homeTeam.color} size={hideDownDistance ? 'xl' : 'lg'} animationDelay={0} />
               </div>
             )}
@@ -1661,6 +1763,48 @@ export function GameScoreboardDisplay({
       </div>
       </div>
       
+      {/* Scoring run */}
+      {sbx.showScoringRuns && ex.scoringRun?.points >= 10 && (() => {
+        const team = ex.scoringRun.team === 'home' ? homeTeam : awayTeam
+        return (
+          <div className="flex justify-center mt-3">
+            <span className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-bold text-white ring-1 ring-white/20 animate-slide-up" style={{ backgroundColor: team.color }}>
+              🔥 {team.abbreviation} · {ex.scoringRun.points} straight points
+            </span>
+          </div>
+        )
+      })()}
+
+      {/* Scoring summary - every scoring play with the running score */}
+      {sbx.showScoringSummary && scoringPlays.length > 0 && (() => {
+        let home = 0, away = 0
+        const rows = scoringPlays.map(e => {
+          if (e.team === 'home') home += e.points; else if (e.team === 'away') away += e.points
+          return { ...e, home, away }
+        })
+        return (
+          <div className="w-full mt-3 rounded-xl p-3 bg-slate-800/90 text-white animate-slide-up">
+            <p className="text-center text-xs font-black tracking-[0.2em] text-amber-400 mb-2">SCORING SUMMARY</p>
+            <div className="space-y-1 max-h-72 overflow-y-auto">
+              {rows.map(r => {
+                const team = r.team === 'home' ? homeTeam : awayTeam
+                return (
+                  <div key={r.id} className="flex items-center gap-2 text-sm">
+                    <span className="w-8 shrink-0 text-xs text-slate-400">{r.quarter}</span>
+                    <span className="w-14 shrink-0 flex items-center gap-1.5 font-bold text-white">
+                      <span className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-white/30" style={{ backgroundColor: team.color }} />
+                      {team.abbreviation}
+                    </span>
+                    <span className="flex-1 min-w-0 truncate text-slate-200">{r.description}</span>
+                    <span className="shrink-0 font-mono text-xs text-slate-300 tabular-nums">{awayTeam.abbreviation} {r.away} - {homeTeam.abbreviation} {r.home}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Overtime Rules - bottom panel, below the scores so it never covers them */}
       {showOTRules && (() => {
         const rules = getOvertimeRules(game.ot_format, game.overtime_length)
@@ -1786,6 +1930,41 @@ export function GameScoreboardDisplay({
           )}
         </div>
       )}
+
+      {/* Sponsors - rotating */}
+      {sbx.sponsors?.show && sponsorItems.length > 0 && (() => {
+        const item = sponsorItems[sponsorIndex % sponsorItems.length]
+        return (
+          <div key={`sponsor-${sponsorIndex % sponsorItems.length}`} className="w-full mt-3 rounded-lg px-4 py-2 bg-slate-800/90 ring-1 ring-white/10 flex items-center justify-center gap-3 animate-fade-in">
+            {item.imageUrl?.trim() && <img src={item.imageUrl} alt="" className="h-8 w-auto max-w-[8rem] object-contain" />}
+            {item.text?.trim() && <span className="text-sm font-semibold text-slate-200 text-center">{item.text}</span>}
+          </div>
+        )
+      })()}
+
+      {/* Other scores this week */}
+      {sbx.showOtherScores && otherGames.length > 0 && (() => {
+        const label = (g) => {
+          const a = g.away_team?.abbreviation || 'TBD', h = g.home_team?.abbreviation || 'TBD'
+          if (g.status === 'final' || g.quarter?.startsWith('Final')) return `${a} ${g.away_score}  ${h} ${g.home_score}  FINAL`
+          if (g.status === 'live') return `${a} ${g.away_score}  ${h} ${g.home_score}  ${g.quarter || ''} ${g.game_time || ''}`.trim()
+          const when = g.scheduled_at ? new Date(g.scheduled_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'TBD'
+          return `${a} @ ${h}  ${when}`
+        }
+        const items = otherGames.map(label)
+        return (
+          <div className="w-full mt-3 rounded-lg bg-slate-800/90 ring-1 ring-white/10 overflow-hidden flex items-center">
+            <span className="shrink-0 px-3 py-1.5 text-[10px] font-black tracking-[0.15em] text-amber-400 bg-slate-900/80">SCORES</span>
+            <div className="relative flex-1 overflow-hidden">
+              <div className="flex w-max animate-ticker whitespace-nowrap py-1.5" style={{ animationDuration: `${Math.max(20, items.length * 6)}s` }}>
+                {[...items, ...items].map((t, i) => (
+                  <span key={i} className="px-5 text-sm font-semibold text-slate-200">{t}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Extra Info Box - Bottom */}
       {extraInfo?.show && extraInfo?.side === 'bottom' && extraInfo?.lines?.some(l => l.text) && (

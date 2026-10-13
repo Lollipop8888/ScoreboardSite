@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { ownYardLineToSpot, yardsToGoal, advanceSpot, spotLabel } from '@/lib/fieldPosition'
 import { CLOSE_CALLS, CLOSE_CALL_TYPES } from '@/lib/closeCalls'
 import { getOvertimeRules } from '@/lib/overtime'
 import { useParams } from 'react-router-dom'
@@ -251,6 +252,21 @@ export default function LiveGamePage({ standalone = false }) {
   const [showOTEndPrompt, setShowOTEndPrompt] = useState(false)
   // Overtime rules panel on the scoreboard: shown when OT starts, hidden when the clock starts
   const [showOTRules, setShowOTRules] = useState(false)
+  // Scoreboard extras (settings in the Scoreboard Extras card)
+  const [scoreboardExtras, setScoreboardExtras] = useState({
+    showBallSpot: false,        // ball spot line + field strip under down & distance
+    showDriveSummaries: true,   // drive summary when possession changes
+    showScoringSummary: false,  // scoring plays panel (turned on at halftime and final)
+    showScoringRuns: false,     // "PHI - 17 straight points"
+    showOtherScores: false,     // other games in the league this week
+    venue: { show: false, text: '' },
+    sponsors: { show: false, interval: 8, items: [] }, // items: { id, text, imageUrl }
+    theme: 'dark',              // 'dark' | 'light' | 'team'
+    size: 'normal',             // 'normal' | 'large' | 'xl' (applies on wide screens only)
+  })
+  const updateExtras = (changes) => setScoreboardExtras(prev => ({ ...prev, ...changes }))
+  const [driveSummary, setDriveSummary] = useState(null) // { id, team, plays, yards, seconds, result }
+  const [scoringRun, setScoringRun] = useState(null)     // { team, points }: consecutive points by one team
   // Close call being decided on the field: { type: 'firstDown' | 'touchdown' | 'catch' | 'fumble', result: null | 'yes' | 'no' }
   const [closeCall, setCloseCall] = useState(null)
   // Quarter whose clock hit 0:00 while a play may still be running; its end waits for the play
@@ -471,6 +487,12 @@ export default function LiveGamePage({ standalone = false }) {
           if (savedState.timeOfPossession) setTimeOfPossession(savedState.timeOfPossession)
           if (savedState.showOTRules) setShowOTRules(true)
           if (savedState.closeCall && !savedState.closeCall.result) setCloseCall(savedState.closeCall)
+          if (savedState.scoreboardExtras) setScoreboardExtras(prev => ({ ...prev, ...savedState.scoreboardExtras }))
+          if (savedState.scoringRun) setScoringRun(savedState.scoringRun)
+          if (savedState.currentDrive) {
+            driveRef.current = savedState.currentDrive
+            prevPossessionForDriveRef.current = savedState.currentDrive.team
+          }
           // Restore game log
           if (savedState.gameLog) setGameLog(savedState.gameLog)
           // Restore visibility settings
@@ -1028,9 +1050,57 @@ export default function LiveGamePage({ standalone = false }) {
     } else if (game.quarter !== 'Pregame') {
       addGameLogEntry('quarter', `Start of ${game.quarter}`)
     }
+    // Scoring summary: up at halftime and at the end, down when play resumes
+    if (game.quarter === 'Halftime' || game.quarter?.startsWith('Final')) updateExtras({ showScoringSummary: true })
+    else if (game.quarter !== 'Pregame') updateExtras({ showScoringSummary: false })
     // Going into overtime: put the OT rules up on the scoreboard
     if (game.quarter === 'OT' && !last.quarter?.startsWith('OT')) setShowOTRules(true)
   }, [game?.id, game?.quarter])
+
+  // Drives: start when a team gets the ball, summarize when it loses it
+  const driveRef = useRef(null) // { team, startSpot, startTop, plays, punted, logStart }
+  const prevPossessionForDriveRef = useRef(null)
+  useEffect(() => {
+    if (gameStatus === 'punt' && driveRef.current) {
+      driveRef.current.punted = true
+      driveRef.current.plays += 1
+    }
+    if (fgResult && driveRef.current) driveRef.current.plays += 1
+  }, [gameStatus, fgResult])
+  useEffect(() => {
+    const prev = prevPossessionForDriveRef.current
+    prevPossessionForDriveRef.current = possession
+    if (prev === possession) return
+    const drive = driveRef.current
+    if (drive && drive.team === prev && drive.plays > 0 && scoreboardExtras.showDriveSummaries) {
+      // How the drive ended, from the game log since it started
+      let result = drive.punted ? 'Punt' : ''
+      for (const e of gameLog.slice(drive.logStart)) {
+        if (e.team === drive.team && e.type === 'score' && e.description.startsWith('Touchdown')) result = 'Touchdown'
+        else if (e.team === drive.team && e.type === 'score' && e.description.startsWith('Field goal')) result = 'Field Goal'
+        else if (e.team === drive.team && e.type === 'turnover') result = e.description.split(' - ')[0]
+        else if (e.team === drive.team && e.type === 'down' && e.description === 'Turnover on downs') result = 'Turnover on Downs'
+        else if (e.team === drive.team && e.type === 'kick' && e.description.startsWith('Field goal')) result = 'Missed FG'
+        else if (e.team !== drive.team && e.type === 'score' && e.description === 'Safety') result = 'Safety'
+      }
+      const yards = !scoreboardExtras.showBallSpot ? null
+        : result === 'Touchdown' ? yardsToGoal(drive.startSpot, drive.team)
+        : (ballOn - drive.startSpot) * (drive.team === 'home' ? 1 : -1)
+      const summary = {
+        id: Date.now(),
+        team: drive.team,
+        plays: drive.plays,
+        yards,
+        seconds: Math.max(0, (timeOfPossession[drive.team] || 0) - drive.startTop),
+        result,
+      }
+      setDriveSummary(summary)
+      setTimeout(() => setDriveSummary(cur => (cur?.id === summary.id ? null : cur)), 8000)
+    }
+    driveRef.current = (possession === 'home' || possession === 'away')
+      ? { team: possession, startSpot: ballOn, startTop: timeOfPossession[possession] || 0, plays: 0, punted: false, logStart: gameLog.length }
+      : null
+  }, [possession])
 
   // Points by quarter follow the score itself, so every way of scoring (TD, PAT, 2PT, FG, safety,
   // manual +/-) is counted, and corrections take points back off.
@@ -1049,6 +1119,12 @@ export default function LiveGamePage({ standalone = false }) {
     for (const team of ['home', 'away']) {
       const delta = scores[team] - last[team]
       if (delta === 0) continue
+      // Scoring run: consecutive points by one team (a score reset clears it)
+      setScoringRun(run => {
+        if (scores.home === 0 && scores.away === 0) return null
+        if (delta > 0) return run?.team === team ? { team, points: run.points + delta } : { team, points: delta }
+        return run?.team === team ? { team, points: Math.max(0, run.points + delta) } : run
+      })
       setQuickStats(s => {
         const t = { ...s[team] }
         if (scores[team] === 0) {
@@ -1141,6 +1217,11 @@ export default function LiveGamePage({ standalone = false }) {
       gameLog,
       showOTRules,
       closeCall,
+      scoreboardExtras,
+      driveSummary,
+      scoringRun,
+      ballOn,
+      currentDrive: driveRef.current, // so a page reload doesn't restart the drive
     })
     
     // Debounce the sync - shorter delay for more responsive updates
@@ -1158,7 +1239,7 @@ export default function LiveGamePage({ standalone = false }) {
     }, 100)
     
     return () => clearTimeout(timeout)
-  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules, closeCall])
+  }, [game?.id, api, down, distance, ballOn, possession, homeTimeouts, awayTimeouts, playClock, bigPlay, flagDisplayStage, displayedPenalties, noTeamFlagText, flagResult, declinedPenaltyIndex, reviewDisplayStage, reviewReason, reviewCallOnField, reviewResult, showTimeoutDisplay, timeoutTeam, usedTimeoutIndex, timeoutClock, scoreCelebration, showTouchback, showOnsideKick, showFirstDown, showIncomplete, showOutOfBounds, show3AndOut, showTurnoverOnDowns, showTurnover, showFumbleRecovery, showRedZone, specialDistance, gameStatus, showLiveIndicator, challengeActive, challengeTeam, showFGAttempt, fgDistance, fgResult, showPATAttempt, patResult, showDownOnly, hideDownDistance, hideTimeouts, hideScore, showRecords, teamRecords, displayTitle, showDisplayTitle, showPlayClock, showCustomMessage, customMessage, customMessageColor, kickoffReceiver, showKickoffChoice, injuryTeam, showInjury, extraInfo, hidePossession, hidePossessionOutline, hideClock, displayStats, quickStats, coinToss, showCoinToss, timeOfPossession, gameLog, showOTRules, closeCall, scoreboardExtras, driveSummary, scoringRun])
 
   // Heartbeat - DISABLED to prevent resource exhaustion
   // useEffect(() => {
@@ -1269,7 +1350,7 @@ export default function LiveGamePage({ standalone = false }) {
     // Points by quarter are tracked from score changes (see the quick stats effect)
     // An offensive TD on 3rd/4th down is a conversion
     if (delta >= 6 && delta <= 8 && team === possession) recordPlayResult('touchdown')
-    if (newScore !== currentScore) addGameLogEntry(delta < 0 ? 'correction' : 'score', describeScore(newScore - currentScore, celebrationData), team)
+    if (newScore !== currentScore) addGameLogEntry(delta < 0 ? 'correction' : 'score', describeScore(newScore - currentScore, celebrationData), team, { points: newScore - currentScore })
     
     // Trigger celebration overlay for TDs, FGs, Safeties, and conversions
     if (delta === 6 || delta === 7 || delta === 8) {
@@ -1299,7 +1380,7 @@ export default function LiveGamePage({ standalone = false }) {
     const currentScore = team === 'home' ? game.home_score : game.away_score
     const newScore = currentScore + 2
     
-    addGameLogEntry('score', 'Safety', team)
+    addGameLogEntry('score', 'Safety', team, { points: 2 })
     await updateGame({ [field]: newScore })
     setScoreCelebration({ type: 'safety', team, points: 2 })
     setTimeout(() => {
@@ -1322,7 +1403,7 @@ export default function LiveGamePage({ standalone = false }) {
     const field = team === 'home' ? 'home_score' : 'away_score'
     const currentScore = team === 'home' ? game.home_score : game.away_score
     const newScore = currentScore + 2
-    addGameLogEntry('score', '2-point conversion good', team)
+    addGameLogEntry('score', '2-point conversion good', team, { points: 2 })
     await updateGame({ [field]: newScore })
     setScoreCelebration({ type: '2pt', team, points: 2 })
     setTimeout(() => setScoreCelebration(null), 2000)
@@ -1346,8 +1427,9 @@ export default function LiveGamePage({ standalone = false }) {
   }
   
   // Add entry to game log
-  function addGameLogEntry(type, description, team = null) {
+  function addGameLogEntry(type, description, team = null, extra = {}) {
     const entry = {
+      ...extra,
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       timestamp: new Date().toISOString(),
       quarter: gameRef.current?.quarter || game?.quarter || 'Pregame',
@@ -1938,6 +2020,7 @@ export default function LiveGamePage({ standalone = false }) {
     const team = possession
     if (team !== 'home' && team !== 'away') return
     const playDown = down
+    if (result !== 'penaltyFirstDown' && driveRef.current) driveRef.current.plays += 1
     // Remember the down & distance before a first down, in case a penalty on the play takes it away
     firstDownUndoRef.current = result === 'firstDown' ? { team, down: playDown, distance, specialDistance, at: Date.now() } : null
     // Game log: first downs (noting 3rd/4th down conversions), and anything given a description
@@ -1971,6 +2054,29 @@ export default function LiveGamePage({ standalone = false }) {
     setTimeout(() => setShowFirstDown(false), 3000)
     // Track first down (and 3rd/4th down conversion) in quick stats
     recordPlayResult('firstDown')
+    // Inside the 10 with the ball spot tracked: & Goal
+    if (scoreboardExtras.showBallSpot && (possession === 'home' || possession === 'away')) {
+      const toGoal = yardsToGoal(ballOn, possession)
+      if (toGoal <= 10) {
+        setDistance(toGoal)
+        setSpecialDistance('goal')
+      }
+    }
+  }
+
+  // Ball spot buttons: move the ball for the offense (negative = loss) and keep the line to gain fixed
+  function moveBall(yards) {
+    const team = possession
+    if (team !== 'home' && team !== 'away') return
+    const newSpot = advanceSpot(ballOn, team, yards)
+    const gained = (newSpot - ballOn) * (team === 'home' ? 1 : -1)
+    setBallOn(newSpot)
+    if (specialDistance === 'goal') {
+      setDistance(Math.max(1, yardsToGoal(newSpot, team)))
+    } else {
+      setDistance(Math.max(1, distance - gained))
+      if (specialDistance === 'inches') setSpecialDistance(null)
+    }
   }
 
   // Close calls: the ball is dead while it's decided, so the clock stops
@@ -3428,6 +3534,7 @@ export default function LiveGamePage({ standalone = false }) {
               timeOfPossession={timeOfPossession}
               showOTRules={showOTRules}
               closeCall={closeCall}
+              extras={{ scoreboardExtras, driveSummary, scoringRun, ballOn, gameLog }}
               showCoinToss={showCoinToss}
               coinTossData={coinToss}
             />
@@ -4255,6 +4362,53 @@ export default function LiveGamePage({ standalone = false }) {
               </div>
             </div>
             
+            {/* Ball spot - absolute field position, see lib/fieldPosition.js */}
+            {(() => {
+              const homeAbbr = game.home_team?.abbreviation || 'HOME'
+              const awayAbbr = game.away_team?.abbreviation || 'AWAY'
+              const side = ballOn <= 50 ? 'home' : 'away'
+              const yardLine = ballOn <= 50 ? ballOn : 100 - ballOn
+              const hasOffense = possession === 'home' || possession === 'away'
+              return (
+                <div className="bg-slate-100 dark:bg-slate-800 rounded-lg p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-slate-500 uppercase">Ball on <span className="ml-1 text-sm font-bold text-slate-900 dark:text-white normal-case">{spotLabel(ballOn, homeAbbr, awayAbbr)}</span></p>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+                      <input type="checkbox" checked={scoreboardExtras.showBallSpot} onChange={(e) => updateExtras({ showBallSpot: e.target.checked })} />
+                      Show on scoreboard
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <select
+                      value={side}
+                      onChange={(e) => setBallOn(ownYardLineToSpot(e.target.value, yardLine))}
+                      className="h-8 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-1 text-sm"
+                    >
+                      <option value="away">{awayAbbr}</option>
+                      <option value="home">{homeAbbr}</option>
+                    </select>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={yardLine}
+                      onChange={(e) => {
+                        const y = Math.min(50, Math.max(1, parseInt(e.target.value) || 1))
+                        setBallOn(ownYardLineToSpot(side, y))
+                      }}
+                      className="h-8 w-16 text-sm"
+                    />
+                    <span className="text-[11px] text-slate-500 mx-1">Gain:</span>
+                    {[-5, -1, 1, 5, 10].map(y => (
+                      <Button key={y} size="sm" variant="outline" className="h-8 px-2 text-xs" disabled={!hasOffense} onClick={() => moveBall(y)}>
+                        {y > 0 ? `+${y}` : y}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* Quick Actions */}
             <div className="pt-2 border-t space-y-2">
               {/* First Down - Full Width */}
@@ -5336,6 +5490,7 @@ export default function LiveGamePage({ standalone = false }) {
                       className="bg-blue-600 hover:bg-blue-700"
                       onClick={() => {
                         recordPlayResult('turnover', 'Interception - touchback')
+                        setBallOn(ownYardLineToSpot(possession === 'home' ? 'away' : 'home', 20))
                         togglePossession()
                         setPendingTurnoverReview(null)
                         setShowTurnover(null)
@@ -5554,7 +5709,7 @@ export default function LiveGamePage({ standalone = false }) {
                       const altDistance = game.onside_alt_distance || 15
                       setDown(4)
                       setDistance(altDistance)
-                      setBallOn(25)
+                      setBallOn(ownYardLineToSpot(kickingTeam, 25))
                       setPossession(kickingTeam)
                       setGoingForIt(true)
                       setKickingTeam(null)
@@ -5903,6 +6058,7 @@ export default function LiveGamePage({ standalone = false }) {
                       setGameStatus(null)
                       stopTimer()
                       setPossession(kickoffReceiver)
+                      if (kickoffReceiver) setBallOn(ownYardLineToSpot(kickoffReceiver, game.touchback_yard || 25))
                       resetDowns()
                       setShowTouchback(true)
                       setShowKickoffChoice(false)
@@ -6022,6 +6178,7 @@ export default function LiveGamePage({ standalone = false }) {
                     onClick={() => {
                       setGameStatus(null)
                       stopTimer()
+                      setBallOn(ownYardLineToSpot(possession === 'home' ? 'away' : 'home', 20))
                       togglePossession()
                       setShowTouchback(true)
                       setTimeout(() => { 
@@ -7224,6 +7381,148 @@ export default function LiveGamePage({ standalone = false }) {
                     </select>
                   </div>
                 </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Scoreboard Extras */}
+      {game.status === 'live' && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <span>✨</span> Scoreboard Extras
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Look */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-slate-500">Theme</p>
+                <select
+                  value={scoreboardExtras.theme}
+                  onChange={(e) => updateExtras({ theme: e.target.value })}
+                  className="w-full h-9 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-sm"
+                >
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                  <option value="team">Team Colors</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-slate-500">Size (TVs and big screens)</p>
+                <select
+                  value={scoreboardExtras.size}
+                  onChange={(e) => updateExtras({ size: e.target.value })}
+                  className="w-full h-9 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-sm"
+                >
+                  <option value="normal">Normal</option>
+                  <option value="large">Large</option>
+                  <option value="xl">Extra Large</option>
+                </select>
+              </div>
+            </div>
+
+            {/* On/off extras */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+              {[
+                { key: 'showDriveSummaries', label: 'Drive summaries on change of possession' },
+                { key: 'showScoringSummary', label: 'Scoring summary (auto at halftime and final)' },
+                { key: 'showScoringRuns', label: 'Scoring runs ("17 straight points")' },
+                { key: 'showOtherScores', label: "Other scores this week", disabled: standalone },
+              ].map(opt => (
+                <label key={opt.key} className={`flex items-center gap-2 ${opt.disabled ? 'opacity-50' : 'cursor-pointer'}`}>
+                  <input
+                    type="checkbox"
+                    disabled={opt.disabled}
+                    checked={!!scoreboardExtras[opt.key]}
+                    onChange={(e) => updateExtras({ [opt.key]: e.target.checked })}
+                  />
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+
+            {/* Venue / weather line */}
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-slate-500">Venue / weather line</p>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="e.g. Lincoln Financial Field · 54°F, clear"
+                  value={scoreboardExtras.venue.text}
+                  onChange={(e) => updateExtras({ venue: { ...scoreboardExtras.venue, text: e.target.value } })}
+                  className="h-9"
+                />
+                <Button
+                  size="sm"
+                  variant={scoreboardExtras.venue.show ? 'default' : 'outline'}
+                  className="h-9 shrink-0"
+                  disabled={!scoreboardExtras.venue.text.trim()}
+                  onClick={() => updateExtras({ venue: { ...scoreboardExtras.venue, show: !scoreboardExtras.venue.show } })}
+                >
+                  {scoreboardExtras.venue.show ? 'Hide' : 'Show'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Sponsors */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-slate-500">Sponsors (rotate under the scoreboard)</p>
+                <Button
+                  size="sm"
+                  variant={scoreboardExtras.sponsors.show ? 'default' : 'outline'}
+                  className="h-7"
+                  disabled={scoreboardExtras.sponsors.items.length === 0}
+                  onClick={() => updateExtras({ sponsors: { ...scoreboardExtras.sponsors, show: !scoreboardExtras.sponsors.show } })}
+                >
+                  {scoreboardExtras.sponsors.show ? 'Hide' : 'Show'}
+                </Button>
+              </div>
+              {scoreboardExtras.sponsors.items.map((item, i) => (
+                <div key={item.id} className="flex flex-wrap gap-1 items-center">
+                  <Input
+                    placeholder="Text, e.g. Brought to you by Joe's Pizza"
+                    value={item.text}
+                    onChange={(e) => updateExtras({ sponsors: { ...scoreboardExtras.sponsors, items: scoreboardExtras.sponsors.items.map((it, j) => j === i ? { ...it, text: e.target.value } : it) } })}
+                    className="h-8 flex-1 min-w-[10rem] text-sm"
+                  />
+                  <Input
+                    placeholder="Logo image URL (optional)"
+                    value={item.imageUrl}
+                    onChange={(e) => updateExtras({ sponsors: { ...scoreboardExtras.sponsors, items: scoreboardExtras.sponsors.items.map((it, j) => j === i ? { ...it, imageUrl: e.target.value } : it) } })}
+                    className="h-8 flex-1 min-w-[10rem] text-sm"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-8 p-0 text-red-500 border-red-300"
+                    onClick={() => updateExtras({ sponsors: { ...scoreboardExtras.sponsors, items: scoreboardExtras.sponsors.items.filter((_, j) => j !== i) } })}
+                  >
+                    ✕
+                  </Button>
+                </div>
+              ))}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  onClick={() => updateExtras({ sponsors: { ...scoreboardExtras.sponsors, items: [...scoreboardExtras.sponsors.items, { id: `${Date.now()}`, text: '', imageUrl: '' }] } })}
+                >
+                  + Add Sponsor
+                </Button>
+                <span className="text-xs text-slate-500">Rotate every</span>
+                <Input
+                  type="number"
+                  min="3"
+                  max="60"
+                  value={scoreboardExtras.sponsors.interval}
+                  onChange={(e) => updateExtras({ sponsors: { ...scoreboardExtras.sponsors, interval: Math.min(60, Math.max(3, parseInt(e.target.value) || 8)) } })}
+                  className="h-8 w-16 text-sm"
+                />
+                <span className="text-xs text-slate-500">seconds</span>
               </div>
             </div>
           </CardContent>

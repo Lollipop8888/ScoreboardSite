@@ -1013,13 +1013,17 @@ def calculate_live_game_time(game):
     return game
 
 
-def league_ot_format(league) -> str:
-    """The league's overtime format from its game defaults (stored as a JSON string), default NFL."""
+def league_game_defaults(league) -> dict:
+    """The league's game defaults (stored as a JSON string)."""
     try:
-        defaults = json.loads(league.game_defaults) if isinstance(league.game_defaults, str) else (league.game_defaults or {})
+        return json.loads(league.game_defaults) if isinstance(league.game_defaults, str) else (league.game_defaults or {})
     except ValueError:
-        defaults = {}
-    return defaults.get("ot_format") or "nfl"
+        return {}
+
+
+def league_ot_format(league) -> str:
+    """The league's overtime format from its game defaults, default NFL."""
+    return league_game_defaults(league).get("ot_format") or "nfl"
 
 
 @app.get("/api/games/{game_id}", response_model=schemas.GameWithTeams)
@@ -1039,11 +1043,13 @@ def get_game(game_id: str, db: Session = Depends(get_db)):
         game.four_point_fg_enabled = game.league.four_point_fg_enabled
         game.four_point_fg_distance = game.league.four_point_fg_distance
         game.ot_format = league_ot_format(game.league)
+        game.touchback_yard = league_game_defaults(game.league).get("touchback_yard") or 25
     else:
         game.onside_alt_distance = 15
         game.four_point_fg_enabled = False
         game.four_point_fg_distance = 50
         game.ot_format = "nfl"
+        game.touchback_yard = 25
     return game
 
 
@@ -1064,11 +1070,13 @@ def get_game_by_share_code(share_code: str, db: Session = Depends(get_db)):
         game.four_point_fg_enabled = game.league.four_point_fg_enabled
         game.four_point_fg_distance = game.league.four_point_fg_distance
         game.ot_format = league_ot_format(game.league)
+        game.touchback_yard = league_game_defaults(game.league).get("touchback_yard") or 25
     else:
         game.onside_alt_distance = 15
         game.four_point_fg_enabled = False
         game.four_point_fg_distance = 50
         game.ot_format = "nfl"
+        game.touchback_yard = 25
     return game
 
 
