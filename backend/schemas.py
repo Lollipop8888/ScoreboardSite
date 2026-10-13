@@ -707,6 +707,7 @@ class InviteResponse(BaseModel):
 class UserFollowCreate(BaseModel):
     league_id: Optional[str] = None
     game_id: Optional[str] = None
+    team_id: Optional[str] = None
 
 
 class UserFollow(BaseModel):
@@ -714,6 +715,7 @@ class UserFollow(BaseModel):
     user_id: str
     league_id: Optional[str] = None
     game_id: Optional[str] = None
+    team_id: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -771,3 +773,26 @@ class PickCounts(BaseModel):
     home: int
     away: int
     total: int
+
+
+# Co-scorer links
+class CoScorerLinkCreate(BaseModel):
+    panels: List[str]          # "clock", "penalties", "stats"
+    label: Optional[str] = None
+
+
+class RemoteAction(BaseModel):
+    action: str
+    payload: dict = {}
+
+
+# Live chat (share page)
+class ChatSettings(BaseModel):
+    enabled: Optional[bool] = None
+    clear: Optional[bool] = None
+
+
+# ESPN sync
+class EspnSyncRequest(BaseModel):
+    dry_run: bool = True
+    season_id: Optional[str] = None

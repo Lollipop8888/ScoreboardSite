@@ -16,6 +16,10 @@ export default function SharePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [viewerCount, setViewerCount] = useState(0)
+  // Live chat and reactions (game share pages)
+  const [chat, setChat] = useState({ enabled: false, messages: [] })
+  const [floatingReactions, setFloatingReactions] = useState([])
+  const wsRef = useRef(null)
 
   const loadData = useCallback(async () => {
     try {
@@ -59,6 +63,14 @@ export default function SharePage() {
     const ws = createWebSocket(type, code.toUpperCase(), (message) => {
       if (message.type === 'viewer_count') {
         setViewerCount(message.count)
+      } else if (type === 'game' && message.type === 'chat_state') {
+        setChat({ enabled: !!message.enabled, messages: message.messages || [] })
+      } else if (type === 'game' && message.type === 'chat' && message.message) {
+        setChat(prev => ({ ...prev, messages: [...prev.messages, message.message].slice(-50) }))
+      } else if (type === 'game' && message.type === 'reaction' && message.emoji) {
+        const item = { id: `${Date.now()}-${Math.random()}`, emoji: message.emoji, left: 10 + Math.random() * 80 }
+        setFloatingReactions(prev => [...prev, item].slice(-30))
+        setTimeout(() => setFloatingReactions(prev => prev.filter(r => r.id !== item.id)), 2600)
       } else if (type === 'game' && message.type === 'game_update') {
         console.log('[SharePage WS] Received game_update:', message.data)
         if (message.data.notification) {
@@ -89,7 +101,8 @@ export default function SharePage() {
       }
     })
 
-    return () => ws.close()
+    wsRef.current = ws
+    return () => { ws.close(); wsRef.current = null }
   }, [data?.id, type, code, loadData])
 
   if (loading) {
@@ -127,7 +140,15 @@ export default function SharePage() {
 
   // Render based on type
   if (type === 'game') {
-    return <SharedGame game={data} viewerCount={viewerCount} />
+    return (
+      <SharedGame
+        game={data}
+        viewerCount={viewerCount}
+        chat={chat}
+        floatingReactions={floatingReactions}
+        send={(message) => wsRef.current?.send(message)}
+      />
+    )
   }
 
   if (type === 'scoreboard') {
@@ -206,6 +227,22 @@ function ShareButtonWithDialog({ type, code, name }) {
               </div>
             </div>
             
+            {/* Embed code for other websites (games) */}
+            {type === 'game' && (() => {
+              const embed = `<iframe src="${window.location.origin}/embed/${code}" width="100%" height="420" style="border:0" title="Live score"></iframe>`
+              return (
+                <div className="space-y-2">
+                  <Label className="text-sm text-slate-500">Embed on a website</Label>
+                  <div className="flex items-center gap-2">
+                    <Input readOnly value={embed} className="text-xs font-mono" />
+                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(embed)}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* QR Code */}
             <div className="space-y-2 pt-2 border-t">
               <Label className="text-sm text-slate-500">QR Code</Label>
@@ -316,7 +353,7 @@ function ShareButtonWithDialog({ type, code, name }) {
   )
 }
 
-function SharedGame({ game, viewerCount }) {
+function SharedGame({ game, viewerCount, chat, floatingReactions, send }) {
   const [notification, setNotification] = useState(null)
   const [notificationVisible, setNotificationVisible] = useState(false)
   const lastNotificationIdRef = useRef(null)
@@ -406,6 +443,12 @@ function SharedGame({ game, viewerCount }) {
         viewerCount={viewerCount}
       />
       <PickEm game={game} />
+      <FanZone chat={chat} floatingReactions={floatingReactions} send={send} />
+      {(game.status === 'final' || game.quarter?.startsWith('Final')) && game.home_team && game.away_team && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={() => shareFinalCard(game).catch(() => alert('Could not make the image'))}>📸 Final card</Button>
+        </div>
+      )}
       <div className="flex items-center justify-center gap-4">
         <p className="text-sm text-slate-500">
           Watching live • Updates automatically
@@ -853,4 +896,153 @@ function PickEm({ game }) {
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   )
+}
+
+// Fan zone: emoji reactions (always on) and live chat (when the game's scorer turns it on)
+const REACTION_EMOJI = ['🔥', '👏', '😱', '🏈', '🎉', '😤']
+function FanZone({ chat, floatingReactions, send }) {
+  const [name, setName] = useState(() => { try { return localStorage.getItem('gridiron_chat_name') || '' } catch { return '' } })
+  const [text, setText] = useState('')
+  const listRef = useRef(null)
+  useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight }, [chat.messages.length])
+
+  const sendChat = () => {
+    const t = text.trim()
+    if (!t) return
+    try { localStorage.setItem('gridiron_chat_name', name.trim()) } catch { /* ignore */ }
+    send({ type: 'chat', name: name.trim() || 'Fan', text: t })
+    setText('')
+  }
+
+  return (
+    <>
+      {/* Reactions floating up the screen */}
+      <div className="pointer-events-none fixed inset-0 z-40 overflow-hidden">
+        {floatingReactions.map(r => (
+          <span key={r.id} className="absolute bottom-4 text-4xl animate-float-up" style={{ left: `${r.left}%` }}>{r.emoji}</span>
+        ))}
+      </div>
+      <div className="rounded-xl border bg-white dark:bg-slate-900 p-3 space-y-3">
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {REACTION_EMOJI.map(e => (
+            <button key={e} className="text-2xl rounded-full px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-90 transition" onClick={() => send({ type: 'reaction', emoji: e })}>
+              {e}
+            </button>
+          ))}
+        </div>
+        {chat.enabled && (
+          <div className="space-y-2 border-t pt-3">
+            <div ref={listRef} className="max-h-60 overflow-y-auto space-y-1 text-sm">
+              {chat.messages.length === 0 && <p className="text-center text-slate-400 text-xs">No messages yet - say something!</p>}
+              {chat.messages.map(m => (
+                <p key={m.id} className="break-words"><span className="font-semibold">{m.name}:</span> {m.text}</p>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Input value={name} onChange={(e) => setName(e.target.value.slice(0, 24))} placeholder="Name" className="w-24 shrink-0" />
+              <Input
+                value={text}
+                onChange={(e) => setText(e.target.value.slice(0, 200))}
+                onKeyDown={(e) => { if (e.key === 'Enter') sendChat() }}
+                placeholder="Message"
+              />
+              <Button onClick={sendChat} disabled={!text.trim()}>Send</Button>
+            </div>
+            <p className="text-[11px] text-slate-400">Be nice. Messages aren't saved, and the game's scorer can clear the chat.</p>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+// Final card: a social-media-sized image of the result, drawn in the browser
+async function shareFinalCard(game) {
+  const W = 1200, H = 630
+  const canvas = document.createElement('canvas')
+  canvas.width = W
+  canvas.height = H
+  const ctx = canvas.getContext('2d')
+  const home = game.home_team, away = game.away_team
+  const bg = ctx.createLinearGradient(0, 0, W, H)
+  bg.addColorStop(0, away.color || '#334155')
+  bg.addColorStop(0.42, '#020617')
+  bg.addColorStop(0.58, '#020617')
+  bg.addColorStop(1, home.color || '#334155')
+  ctx.fillStyle = bg
+  ctx.fillRect(0, 0, W, H)
+
+  const loadImage = (src) => new Promise((resolve) => {
+    if (!src) return resolve(null)
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(null)
+    img.src = src
+    setTimeout(() => resolve(null), 4000)
+  })
+  const [awayLogo, homeLogo] = await Promise.all([loadImage(away.logo_url), loadImage(home.logo_url)])
+  const drawLogo = (img, cx, team) => {
+    const box = 200
+    if (img) {
+      const scale = Math.min(box / img.width, box / img.height)
+      const w = img.width * scale, h = img.height * scale
+      ctx.drawImage(img, cx - w / 2, 150 + (box - h) / 2, w, h)
+    } else {
+      ctx.fillStyle = '#ffffff'
+      ctx.font = 'bold 96px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(team.abbreviation || '', cx, 290)
+    }
+  }
+  drawLogo(awayLogo, 230, away)
+  drawLogo(homeLogo, W - 230, home)
+
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#fbbf24'
+  ctx.font = 'bold 34px sans-serif'
+  ctx.fillText((game.quarter && game.quarter.startsWith('Final') ? game.quarter : 'FINAL').toUpperCase(), W / 2, 110)
+  ctx.fillStyle = '#ffffff'
+  ctx.font = 'bold 40px sans-serif'
+  ctx.fillText(away.name, 230, 410)
+  ctx.fillText(home.name, W - 230, 410)
+  ctx.font = 'bold 150px sans-serif'
+  const awayWon = game.away_score > game.home_score, homeWon = game.home_score > game.away_score
+  ctx.globalAlpha = homeWon ? 0.6 : 1
+  ctx.fillText(String(game.away_score), W / 2 - 130, 330)
+  ctx.globalAlpha = awayWon ? 0.6 : 1
+  ctx.fillText(String(game.home_score), W / 2 + 130, 330)
+  ctx.globalAlpha = 1
+  ctx.font = 'bold 60px sans-serif'
+  ctx.fillText('-', W / 2, 310)
+
+  // A line of quick stats when the game was scored here
+  let state = {}
+  try { state = typeof game.display_state === 'string' ? JSON.parse(game.display_state || '{}') : (game.display_state || {}) } catch { /* ignore */ }
+  const qs = state.quickStats, top = state.timeOfPossession
+  if (qs?.home && qs?.away) {
+    const fmt = (sec = 0) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+    const parts = [`First downs ${qs.away.firstDowns || 0}-${qs.home.firstDowns || 0}`, `Turnovers ${qs.away.turnovers || 0}-${qs.home.turnovers || 0}`]
+    if (top) parts.push(`Possession ${fmt(top.away)}-${fmt(top.home)}`)
+    ctx.font = '28px sans-serif'
+    ctx.fillStyle = '#cbd5e1'
+    ctx.fillText(parts.join('  ·  '), W / 2, 500)
+  }
+  ctx.font = '24px sans-serif'
+  ctx.fillStyle = '#94a3b8'
+  const when = game.scheduled_at ? new Date(game.scheduled_at).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' }) : ''
+  ctx.fillText([when, window.location.host].filter(Boolean).join('  ·  '), W / 2, 580)
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+  const file = new File([blob], `${away.abbreviation || 'away'}-${home.abbreviation || 'home'}-final.png`, { type: 'image/png' })
+  if (navigator.canShare?.({ files: [file] })) {
+    await navigator.share({ files: [file], title: `${away.name} ${game.away_score}, ${home.name} ${game.home_score}` }).catch(() => {})
+    return
+  }
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = file.name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 5000)
 }

@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, teamSeasonStatsApi, inviteApi, followApi, notificationApi, createWebSocket } from '@/lib/api'
+import { leagueApi, teamApi, gameApi, bracketApi, seasonApi, recordTypeApi, teamSeasonStatsApi, inviteApi, followApi, notificationApi, createWebSocket, leagueExtrasApi } from '@/lib/api'
 import { requestNotificationPermission, subscribeToPush, getPushUnsupportedReason } from '@/lib/notifications'
 
 // Notification permission for this device, or null if push can't be used here (e.g. iOS Safari not added to Home Screen)
@@ -86,6 +86,11 @@ export default function LeagueDetailPage() {
   const [brackets, setBrackets] = useState([])
   const [loading, setLoading] = useState(true)
   const [gamesFilter, setGamesFilter] = useState('scheduled') // 'scheduled', 'current', 'completed'
+  // ESPN sync (owner): preview the changes, then apply after confirming
+  const [espnSync, setEspnSync] = useState({ open: false, loading: false, preview: null, result: null, error: '' })
+  // Stats tab
+  const [leagueStats, setLeagueStats] = useState(null)
+  const [statsSeasonId, setStatsSeasonId] = useState(null)
   // Season shown on the Games tab: null follows the current season, 'all' shows every season
   const [gamesSeasonId, setGamesSeasonId] = useState(null)
   
@@ -685,6 +690,32 @@ export default function LeagueDetailPage() {
     }
   }
 
+  // Stats tab: per-team stats for the selected season (defaults to the current season)
+  useEffect(() => {
+    if (activeTab !== 'stats' || !leagueId) return
+    leagueExtrasApi.stats(leagueId, statsSeasonId).then(setLeagueStats).catch(() => setLeagueStats({ teams: [] }))
+  }, [activeTab, leagueId, statsSeasonId])
+
+  async function previewEspnSync() {
+    setEspnSync({ open: true, loading: true, preview: null, result: null, error: '' })
+    try {
+      const preview = await leagueExtrasApi.syncEspn(leagueId, true, currentSeason?.id)
+      setEspnSync(s => ({ ...s, loading: false, preview }))
+    } catch (e) {
+      setEspnSync(s => ({ ...s, loading: false, error: e.message }))
+    }
+  }
+  async function applyEspnSync() {
+    setEspnSync(s => ({ ...s, loading: true }))
+    try {
+      const result = await leagueExtrasApi.syncEspn(leagueId, false, currentSeason?.id)
+      setEspnSync(s => ({ ...s, loading: false, result }))
+      loadData()
+    } catch (e) {
+      setEspnSync(s => ({ ...s, loading: false, error: e.message }))
+    }
+  }
+
   // Games tab: only the selected season's games (defaults to the current season)
   const effectiveGamesSeasonId = gamesSeasonId ?? currentSeason?.id ?? 'all'
   const seasonGames = effectiveGamesSeasonId === 'all' ? games : games.filter(g => g.season_id === effectiveGamesSeasonId)
@@ -826,6 +857,9 @@ export default function LeagueDetailPage() {
           <TabsTrigger value="games" className="gap-2" data-tutorial="games-tab">
             <Calendar className="h-4 w-4" />
             Games
+          </TabsTrigger>
+          <TabsTrigger value="stats" className="gap-2">
+            📊 Stats
           </TabsTrigger>
           <TabsTrigger value="brackets" className="gap-2" data-tutorial="brackets-tab">
             <GitBranch className="h-4 w-4" />
@@ -1516,11 +1550,22 @@ export default function LeagueDetailPage() {
         {/* Games Tab */}
         <TabsContent value="games">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
               <div>
                 <CardTitle>Games</CardTitle>
                 <CardDescription>Schedule and track games • All times in Eastern Time (ET)</CardDescription>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" asChild>
+                <Link to={`/leagues/${leagueId}/week`}>🗓️ Week view</Link>
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => {
+                const url = `${window.location.origin.replace(/^http/, 'webcal')}/api/calendar/league/${leagueId}.ics`
+                navigator.clipboard?.writeText(url).then(() => alert('Calendar link copied. Add it in your calendar app as a subscription (from URL).'), () => prompt('Calendar subscription link:', url))
+              }}>📅 Calendar</Button>
+              {user && league.owner_id === user.id && !league.is_finished && (
+                <Button size="sm" variant="outline" onClick={previewEspnSync}>🔄 Sync with ESPN</Button>
+              )}
               <Dialog open={gameDialogOpen} onOpenChange={setGameDialogOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm" className="gap-2" disabled={league.teams?.length < 2 || league.is_finished}>
@@ -1639,6 +1684,7 @@ export default function LeagueDetailPage() {
                   </form>
                 </DialogContent>
               </Dialog>
+              </div>
             </CardHeader>
             <CardContent>
               {/* Games Filter Tabs */}
@@ -1972,6 +2018,89 @@ export default function LeagueDetailPage() {
         </TabsContent>
 
         {/* Brackets Tab */}
+        {/* Stats Tab - league stats leaders */}
+        <TabsContent value="stats">
+          <Card>
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle>Stats Leaders</CardTitle>
+                <CardDescription>Points from every final game; first downs, 3rd downs, turnovers, penalties and time of possession from games scored here. Preseason not included.</CardDescription>
+              </div>
+              {seasons.length > 0 && (
+                <Select value={statsSeasonId ?? currentSeason?.id ?? ''} onValueChange={setStatsSeasonId}>
+                  <SelectTrigger className="h-9 w-60"><SelectValue placeholder="Season" /></SelectTrigger>
+                  <SelectContent>
+                    {seasons.map(season => (
+                      <SelectItem key={season.id} value={season.id}>{season.name}{season.is_current ? ' (current)' : ''}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {!leagueStats ? (
+                <div className="flex justify-center py-6"><div className="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>
+              ) : (() => {
+                const teams = leagueStats.teams || []
+                const fmtTop = (sec) => sec == null ? '-' : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+                const categories = [
+                  { key: 'points_per_game', label: 'Points per game', fmt: v => v },
+                  { key: 'points_allowed_per_game', label: 'Fewest points allowed', fmt: v => v, asc: true },
+                  { key: 'first_downs_per_game', label: 'First downs per game', fmt: v => v },
+                  { key: 'third_down_pct', label: '3rd down %', fmt: v => `${v}%` },
+                  { key: 'turnovers_per_game', label: 'Fewest turnovers per game', fmt: v => v, asc: true },
+                  { key: 'top_per_game_seconds', label: 'Time of possession', fmt: fmtTop },
+                ]
+                return (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {categories.map(c => {
+                        const ranked = teams.filter(t => t[c.key] != null).sort((a, b) => c.asc ? a[c.key] - b[c.key] : b[c.key] - a[c.key]).slice(0, 5)
+                        return (
+                          <div key={c.key} className="rounded-lg border p-3">
+                            <p className="text-sm font-semibold mb-2">{c.label}</p>
+                            {ranked.length === 0 ? <p className="text-xs text-slate-400">No games with these stats yet</p> : (
+                              <ol className="space-y-1">
+                                {ranked.map((t, i) => (
+                                  <li key={t.team_id} className="flex items-center gap-2 text-sm">
+                                    <span className="w-4 text-slate-400">{i + 1}</span>
+                                    {t.logo_url ? <img src={t.logo_url} alt="" className="h-5 w-5 object-contain" /> : <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: t.color }} />}
+                                    <span className="flex-1 truncate">{t.name}</span>
+                                    <span className="font-bold tabular-nums">{c.fmt(t[c.key])}</span>
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-slate-500 border-b">
+                            <th className="py-2">Team</th><th>GP</th><th>PF/G</th><th>PA/G</th><th>1st D/G</th><th>3rd %</th><th>TO/G</th><th>Pen Yds/G</th><th>TOP/G</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...teams].sort((a, b) => (b.points_per_game ?? -1) - (a.points_per_game ?? -1)).map(t => (
+                            <tr key={t.team_id} className="border-b last:border-0">
+                              <td className="py-1.5 font-medium">{t.name}</td>
+                              <td>{t.games}</td><td>{t.points_per_game ?? '-'}</td><td>{t.points_allowed_per_game ?? '-'}</td>
+                              <td>{t.first_downs_per_game ?? '-'}</td><td>{t.third_down_pct != null ? `${t.third_down_pct}%` : '-'}</td>
+                              <td>{t.turnovers_per_game ?? '-'}</td><td>{t.penalty_yards_per_game ?? '-'}</td><td>{fmtTop(t.top_per_game_seconds)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )
+              })()}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="brackets">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
@@ -4637,6 +4766,49 @@ export default function LeagueDetailPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      {/* ESPN sync: preview, then apply after confirming */}
+      <Dialog open={espnSync.open} onOpenChange={(open) => setEspnSync(s => ({ ...s, open }))}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Sync with ESPN</DialogTitle>
+            <DialogDescription>
+              Fills in {currentSeason?.name || 'the current season'} from ESPN: final scores for games not scored here, kickoff time changes, and new games (like playoffs). Games in progress here and finals already entered aren't changed. The database is backed up first.
+            </DialogDescription>
+          </DialogHeader>
+          {espnSync.loading && <div className="flex justify-center py-6"><div className="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" /></div>}
+          {espnSync.error && <p className="text-sm text-red-600">{espnSync.error}</p>}
+          {!espnSync.loading && (espnSync.result || espnSync.preview) && (() => {
+            const d = espnSync.result || espnSync.preview
+            const sections = [
+              ['finals', 'Final scores to fill in'], ['new_games', 'New games'], ['time_changes', 'Kickoff time changes'],
+              ['skipped_live', 'Skipped (being scored here)'], ['mismatches', "Finals that don't match ESPN (not changed)"], ['unknown_teams', 'Teams not in this league'],
+            ]
+            const total = (d.finals?.length || 0) + (d.new_games?.length || 0) + (d.time_changes?.length || 0)
+            return (
+              <div className="space-y-3 max-h-80 overflow-y-auto text-sm">
+                {espnSync.result?.applied && <p className="rounded bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-300 p-2">Done. Backup saved as {espnSync.result.backup}.</p>}
+                {!espnSync.result && total === 0 && <p className="text-slate-500">Everything already matches ESPN.</p>}
+                {sections.map(([key, label]) => d[key]?.length ? (
+                  <div key={key}>
+                    <p className="font-semibold">{label} ({d[key].length})</p>
+                    <ul className="list-disc pl-5 text-slate-600 dark:text-slate-300">
+                      {d[key].slice(0, 30).map((line, i) => <li key={i}>{line}</li>)}
+                      {d[key].length > 30 && <li>...and {d[key].length - 30} more</li>}
+                    </ul>
+                  </div>
+                ) : null)}
+              </div>
+            )
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEspnSync(s => ({ ...s, open: false }))}>{espnSync.result ? 'Close' : 'Cancel'}</Button>
+            {!espnSync.result && espnSync.preview && ((espnSync.preview.finals?.length || 0) + (espnSync.preview.new_games?.length || 0) + (espnSync.preview.time_changes?.length || 0)) > 0 && (
+              <Button disabled={espnSync.loading} onClick={applyEspnSync}>Apply changes</Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Game Dialog */}
       <Dialog open={gameEditDialogOpen} onOpenChange={setGameEditDialogOpen}>

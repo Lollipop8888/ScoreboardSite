@@ -14,6 +14,9 @@ import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import AccountPage from './pages/AccountPage'
 import KeybindsPage from './pages/KeybindsPage'
+import CoScorerPage from './pages/CoScorerPage'
+import WeekSchedulePage from './pages/WeekSchedulePage'
+import EmbedPage from './pages/EmbedPage'
 
 function App() {
   return (
@@ -22,11 +25,13 @@ function App() {
       <Route path="/register" element={<RegisterPage />} />
       {/* OBS Display - no layout wrapper for clean overlay */}
       <Route path="/obs/:code" element={<OBSDisplayPage />} />
+      <Route path="/embed/:code" element={<EmbedPage />} />
       <Route path="/" element={<Layout />}>
         <Route index element={<HomePage />} />
         <Route path="leagues" element={<LeaguesPage />} />
         <Route path="leagues/:leagueId" element={<LeagueDetailPage />} />
         <Route path="leagues/:leagueId/teams/:teamId/schedule" element={<TeamSchedulePage />} />
+        <Route path="leagues/:leagueId/week" element={<WeekSchedulePage />} />
         <Route path="u/:username" element={<LeaguesPage />} />
         <Route path="scoreboards" element={<ScoreboardsPage />} />
         <Route path="scoreboards/:scoreboardId" element={<ScoreboardDetailPage />} />
@@ -36,6 +41,7 @@ function App() {
         <Route path="share/:type/:code" element={<SharePage />} />
         <Route path="account" element={<AccountPage />} />
         <Route path="keybinds" element={<KeybindsPage />} />
+        <Route path="coscore/:code/:token" element={<CoScorerPage />} />
       </Route>
     </Routes>
   )

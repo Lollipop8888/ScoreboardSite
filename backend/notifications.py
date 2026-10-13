@@ -195,3 +195,47 @@ def notify_game_followers(db: Session, game_id: str, title: str, body: str, data
         db.commit()
     
     return sent_count
+
+
+def notify_users(db: Session, user_ids, title: str, body: str, data: dict = None, notification_type: str = None):
+    """Send a notification once to each of these users, honoring their notification preferences."""
+    sent_count = 0
+    invalid_endpoints = []
+    for user_id in set(u for u in user_ids if u):
+        prefs = db.query(models.NotificationPreferences).filter(
+            models.NotificationPreferences.user_id == user_id
+        ).first()
+        if prefs:
+            if not prefs.notifications_enabled:
+                continue
+            if notification_type == 'game_start' and not prefs.game_start:
+                continue
+            if notification_type == 'game_end' and not prefs.game_end:
+                continue
+            if notification_type == 'score_update' and not prefs.score_updates:
+                continue
+            if notification_type == 'quarter_end' and not prefs.quarter_end:
+                continue
+        for sub in db.query(models.PushSubscription).filter(models.PushSubscription.user_id == user_id).all():
+            result = send_push_notification(
+                {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}, title, body, data
+            )
+            if result is True:
+                sent_count += 1
+            elif result is False:
+                invalid_endpoints.append(sub.endpoint)
+    for endpoint in invalid_endpoints:
+        db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == endpoint).delete()
+    if invalid_endpoints:
+        db.commit()
+    return sent_count
+
+
+def notify_game_audience(db: Session, game, title: str, body: str, data: dict = None, notification_type: str = None):
+    """Notify everyone following this game, its league, or either team - once each."""
+    follows = db.query(models.UserFollow).filter(
+        (models.UserFollow.game_id == game.id) |
+        (models.UserFollow.league_id == game.league_id) |
+        (models.UserFollow.team_id.in_([t for t in (game.home_team_id, game.away_team_id) if t]))
+    ).all()
+    return notify_users(db, [f.user_id for f in follows], title, body, data, notification_type)

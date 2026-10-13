@@ -274,12 +274,15 @@ export function createWebSocket(type, shareCode, onMessage) {
   
   connect();
   
-  // Return an object with close method that prevents reconnection
+  // Return an object with close method that prevents reconnection, and send for chat/reactions
   return {
     close: () => {
       isClosed = true;
       if (ws) ws.close();
-    }
+    },
+    send: (message) => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    },
   };
 }
 
@@ -298,6 +301,8 @@ export const followApi = {
   followGame: (gameId) => fetchApi('/follows', { method: 'POST', body: JSON.stringify({ game_id: gameId }) }),
   unfollowLeague: (leagueId) => fetchApi(`/follows/league/${leagueId}`, { method: 'DELETE' }),
   unfollowGame: (gameId) => fetchApi(`/follows/game/${gameId}`, { method: 'DELETE' }),
+  followTeam: (teamId) => fetchApi('/follows', { method: 'POST', body: JSON.stringify({ team_id: teamId }) }),
+  unfollowTeam: (teamId) => fetchApi(`/follows/team/${teamId}`, { method: 'DELETE' }),
   delete: (id) => fetchApi(`/follows/${id}`, { method: 'DELETE' }),
 };
 
@@ -308,4 +313,36 @@ export const notificationApi = {
   subscribe: (subscription) => fetchApi('/push-subscriptions', { method: 'POST', body: JSON.stringify(subscription) }),
   unsubscribe: (endpoint) => fetchApi(`/push-subscriptions?endpoint=${encodeURIComponent(endpoint)}`, { method: 'DELETE' }),
   testNotification: () => fetchApi('/test-notification', { method: 'POST' }),
+};
+
+// Requests that use their own token in the URL (co-scorer links): an error here shouldn't log the
+// viewer out the way fetchApi does on 401/403
+async function publicFetch(endpoint, options = {}) {
+  const response = await fetch(`${API_BASE}${endpoint}`, { headers: { 'Content-Type': 'application/json' }, ...options })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`)
+  return body
+}
+
+// Co-scorer links (owner) and co-scorer access (link holders)
+export const coScorerApi = {
+  list: (shareCode) => fetchApi(`/coscorers/${shareCode}`),
+  create: (shareCode, panels, label) => fetchApi(`/coscorers/${shareCode}`, { method: 'POST', body: JSON.stringify({ panels, label }) }),
+  remove: (shareCode, linkId) => fetchApi(`/coscorers/${shareCode}/${linkId}`, { method: 'DELETE' }),
+  access: (shareCode, token) => publicFetch(`/coscore/${shareCode}/${token}`),
+  action: (shareCode, token, action, payload = {}) =>
+    publicFetch(`/coscore/${shareCode}/${token}/action`, { method: 'POST', body: JSON.stringify({ action, payload }) }),
+};
+
+// Share page live chat settings (owner)
+export const chatApi = {
+  get: (shareCode) => fetchApi(`/chat/${shareCode}`),
+  update: (shareCode, settings) => fetchApi(`/chat/${shareCode}`, { method: 'POST', body: JSON.stringify(settings) }),
+};
+
+// League extras: ESPN sync (owner) and stats leaders
+export const leagueExtrasApi = {
+  syncEspn: (leagueId, dryRun, seasonId = null) =>
+    fetchApi(`/leagues/${leagueId}/sync-espn`, { method: 'POST', body: JSON.stringify({ dry_run: dryRun, season_id: seasonId }) }),
+  stats: (leagueId, seasonId = null) => fetchApi(`/leagues/${leagueId}/stats${seasonId ? `?season_id=${seasonId}` : ''}`),
 };

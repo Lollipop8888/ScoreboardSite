@@ -405,6 +405,7 @@ class UserFollow(Base):
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     league_id = Column(String, ForeignKey("leagues.id", ondelete="CASCADE"), nullable=True)
     game_id = Column(String, ForeignKey("games.id", ondelete="CASCADE"), nullable=True)
+    team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), nullable=True)  # migrate_add_follow_team.py
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -447,3 +448,15 @@ class GamePick(Base):
     team = Column(String(4), nullable=False)  # 'home' or 'away'
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CoScorerLink(Base):
+    """A private link that lets a helper send actions (clock, penalties, stats) to a game's scoring page."""
+    __tablename__ = "co_scorer_links"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    share_code = Column(String(8), nullable=False, index=True)
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    panels = Column(Text, nullable=False)  # JSON list: "clock", "penalties", "stats"
+    label = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)

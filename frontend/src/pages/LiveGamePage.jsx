@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { NFL_PENALTIES } from '@/lib/penalties'
 import { ownYardLineToSpot, yardsToGoal, advanceSpot, spotLabel } from '@/lib/fieldPosition'
 import { CLOSE_CALLS, CLOSE_CALL_TYPES } from '@/lib/closeCalls'
 import { getOvertimeRules } from '@/lib/overtime'
@@ -23,7 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { gameApi, standaloneGameApi, teamApi, bracketApi, createWebSocket, inviteApi } from '@/lib/api'
+import { gameApi, standaloneGameApi, teamApi, bracketApi, createWebSocket, inviteApi, coScorerApi, chatApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { GameScoreboardDisplay } from '@/components/GameScoreboardDisplay'
 import { HelpButton, FirstTimeTutorial } from '@/components/HelpTips'
@@ -41,54 +42,6 @@ const SCORING_PLAYS = [
 ]
 
 // Common NFL penalties
-const NFL_PENALTIES = [
-  { name: 'False Start', yards: 5, category: 'Pre-Snap', deadBall: true },
-  { name: 'Offside', yards: 5, category: 'Pre-Snap' },
-  { name: 'Encroachment', yards: 5, category: 'Pre-Snap', deadBall: true },
-  { name: 'Neutral Zone Infraction', yards: 5, category: 'Pre-Snap', deadBall: true },
-  { name: 'Delay of Game', yards: 5, category: 'Pre-Snap', deadBall: true },
-  { name: 'Illegal Formation', yards: 5, category: 'Pre-Snap' },
-  { name: 'Illegal Shift', yards: 5, category: 'Pre-Snap' },
-  { name: 'Illegal Motion', yards: 5, category: 'Pre-Snap' },
-  { name: 'Holding (Offense)', yards: 10, category: 'Offense' },
-  { name: 'Holding (Defense)', yards: 5, category: 'Defense', autoFirst: true },
-  { name: 'Pass Interference (Offense)', yards: 10, category: 'Offense' },
-  { name: 'Pass Interference (Defense)', yards: 0, category: 'Defense', spotFoul: true, autoFirst: true },
-  { name: 'Illegal Contact', yards: 5, category: 'Defense', autoFirst: true },
-  { name: 'Roughing the Passer', yards: 15, category: 'Defense', autoFirst: true },
-  { name: 'Roughing the Kicker', yards: 15, category: 'Defense', autoFirst: true },
-  { name: 'Running into the Kicker', yards: 5, category: 'Defense' },
-  { name: 'Unnecessary Roughness', yards: 15, category: 'Personal Foul' },
-  { name: 'Personal Foul', yards: 15, category: 'Personal Foul' },
-  { name: 'Facemask', yards: 15, category: 'Personal Foul' },
-  { name: 'Horse Collar Tackle', yards: 15, category: 'Personal Foul' },
-  { name: 'Unsportsmanlike Conduct', yards: 15, category: 'Personal Foul' },
-  { name: 'Taunting', yards: 15, category: 'Personal Foul' },
-  { name: 'Illegal Block in the Back', yards: 10, category: 'Special Teams' },
-  { name: 'Illegal Use of Hands', yards: 10, category: 'Offense' },
-  { name: 'Intentional Grounding', yards: 10, category: 'Offense', lossOfDown: true },
-  { name: 'Ineligible Receiver Downfield', yards: 5, category: 'Offense' },
-  { name: 'Ineligible Man Downfield', yards: 5, category: 'Offense' },
-  { name: 'Illegal Forward Pass', yards: 5, category: 'Offense', lossOfDown: true },
-  { name: 'Too Many Men on Field', yards: 5, category: 'Pre-Snap' },
-  { name: 'Illegal Substitution', yards: 5, category: 'Pre-Snap', deadBall: true },
-  { name: 'Clipping', yards: 15, category: 'Personal Foul' },
-  { name: 'Chop Block', yards: 15, category: 'Personal Foul' },
-  { name: 'Tripping', yards: 10, category: 'Personal Foul' },
-  { name: 'Kick Catch Interference', yards: 15, category: 'Special Teams' },
-  { name: 'Illegal Kick', yards: 10, category: 'Special Teams' },
-  { name: 'Offside on Kickoff', yards: 5, category: 'Special Teams' },
-  { name: 'Illegal Touch (Kickoff)', yards: 5, category: 'Special Teams' },
-  { name: 'Illegal Formation (Kickoff)', yards: 5, category: 'Special Teams' },
-  { name: 'Short Free Kick', yards: 5, category: 'Special Teams' },
-  { name: 'Kickoff Out of Bounds', yards: 0, category: 'Special Teams' },
-  { name: 'Illegal Wedge', yards: 15, category: 'Special Teams' },
-  { name: 'Fair Catch Interference', yards: 15, category: 'Special Teams' },
-  { name: 'Invalid Fair Catch Signal', yards: 5, category: 'Special Teams' },
-  { name: 'Leaping', yards: 15, category: 'Defense' },
-  { name: 'Leverage', yards: 15, category: 'Defense' },
-  { name: 'Other', yards: 0, category: 'Other' },
-]
 
 // Small X in the top-left corner of an Immediate Actions box that has no other way out
 function BoxClose({ onClick }) {
@@ -285,6 +238,13 @@ export default function LiveGamePage({ standalone = false }) {
   const [playOutOfBounds, setPlayOutOfBounds] = useState(false)
   // League custom penalties (League Settings > Penalties), shown in the flag panel
   const [leaguePenalties, setLeaguePenalties] = useState([])
+  // Co-scorers: private links for helpers who run some panels from their own device
+  const [coScorerLinks, setCoScorerLinks] = useState([])
+  const [coScorerForm, setCoScorerForm] = useState({ label: '', panels: { clock: false, penalties: true, stats: false } })
+  const [remoteNotice, setRemoteNotice] = useState(null)
+  const remoteActionRef = useRef(null)
+  // Share page live chat (server-side setting)
+  const [chatEnabled, setChatEnabled] = useState(false)
   // Close call being decided on the field: { type: 'firstDown' | 'touchdown' | 'catch' | 'fumble', result: null | 'yes' | 'no' }
   const [closeCall, setCloseCall] = useState(null)
   // Coin toss: which toss ('Pregame' or 'OT') is finished and put away, so its boxes don't come back
@@ -602,6 +562,48 @@ export default function LiveGamePage({ standalone = false }) {
     }
   }, [game?.id]) // Only run when game ID changes (initial load)
 
+  // Co-scorer actions. Rebuilt every render so it always works with the current state.
+  const QUICK_STAT_KEYS = ['turnovers', 'firstDowns', 'penalties', 'penaltyYards', 'thirdDownAtt', 'thirdDownConv', 'fourthDownAtt', 'fourthDownConv']
+  remoteActionRef.current = ({ action, payload = {}, from }) => {
+    switch (action) {
+      case 'clock_toggle': toggleTimer(); break
+      case 'clock_adjust': adjustGameTime(Number(payload.seconds) || 0); break
+      case 'flag': {
+        const list = (payload.penalties || [])
+          .map(p => ({ penalty: allPenalties.find(x => x.name === p.name), team: p.team }))
+          .filter(x => x.penalty && (x.team === 'home' || x.team === 'away'))
+        stopTimer()
+        showFlagStage1()
+        setSelectedPenalties(list)
+        break
+      }
+      case 'flag_details': showFlagStage2(); break
+      case 'flag_apply': applyPenalty(); break
+      case 'flag_decline': setFlagDeclined(payload.index ?? null); break
+      case 'flag_pickup': setFlagPickedUp(); break
+      case 'flag_offsetting': setFlagOffsetting(); break
+      case 'flag_replay': setReplayFlaggedPlay(!!payload.replay); break
+      case 'flag_cancel': hideFlagFromDisplay(); break
+      case 'stat': {
+        const { team, key, delta } = payload
+        if ((team !== 'home' && team !== 'away') || !QUICK_STAT_KEYS.includes(key)) return
+        setQuickStats(s => ({ ...s, [team]: { ...s[team], [key]: Math.max(0, (s[team][key] || 0) + (Number(delta) || 0)) } }))
+        break
+      }
+      case 'timeout': if (payload.team === 'home' || payload.team === 'away') useTimeout(payload.team); break
+      default: return
+    }
+    setRemoteNotice(`${from || 'Co-scorer'}: ${action.replace('_', ' ')}`)
+    setTimeout(() => setRemoteNotice(null), 3000)
+  }
+
+  // Co-scorer links and chat setting for this game (owner)
+  useEffect(() => {
+    if (!game?.share_code) return
+    coScorerApi.list(game.share_code).then(setCoScorerLinks).catch(() => {})
+    chatApi.get(game.share_code).then(r => setChatEnabled(!!r.enabled)).catch(() => {})
+  }, [game?.share_code])
+
   // League custom penalties for the flag panel
   useEffect(() => {
     if (!game?.league_id || standalone) return
@@ -654,6 +656,9 @@ export default function LiveGamePage({ standalone = false }) {
         if (message.data?.viewer_count !== undefined) {
           setGame((prev) => prev ? { ...prev, viewer_count: message.data.viewer_count } : prev)
         }
+      } else if (message.type === 'remote_action' && message.data) {
+        // A co-scorer's action: applied here, so this page stays the source of truth
+        remoteActionRef.current?.(message.data)
       }
     })
 
@@ -3636,6 +3641,12 @@ export default function LiveGamePage({ standalone = false }) {
           <Button size="sm" variant={showPlayEntry ? 'default' : 'outline'} className={showPlayEntry ? 'bg-sky-600 hover:bg-sky-700' : ''} onClick={() => setShowPlayEntry(!showPlayEntry)}>
             📝 Play entry{showPlayEntry ? ' ✓' : ''}
           </Button>
+        </div>
+      )}
+
+      {remoteNotice && (
+        <div className="fixed top-20 right-4 z-50 rounded-lg bg-sky-600 text-white text-sm font-semibold px-3 py-2 shadow-lg animate-slide-up">
+          🎧 {remoteNotice}
         </div>
       )}
 
@@ -7806,6 +7817,71 @@ export default function LiveGamePage({ standalone = false }) {
                   {scoreboardExtras.venue.show ? 'Hide' : 'Show'}
                 </Button>
               </div>
+            </div>
+
+            {/* Live chat on the share page */}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={chatEnabled}
+                  onChange={(e) => {
+                    const enabled = e.target.checked
+                    setChatEnabled(enabled)
+                    chatApi.update(game.share_code, { enabled }).catch(() => setChatEnabled(!enabled))
+                  }}
+                />
+                Live chat on the share page (reactions are always on)
+              </label>
+              <Button size="sm" variant="outline" className="h-7" onClick={() => {
+                if (confirm('Clear all chat messages?')) chatApi.update(game.share_code, { clear: true }).catch(() => {})
+              }}>Clear chat</Button>
+            </div>
+
+            {/* Co-scorers */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-slate-500">Co-scorers: private links for helpers on their own device. Their actions arrive on this page (keep it open).</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  placeholder="Name, e.g. Booth"
+                  value={coScorerForm.label}
+                  onChange={(e) => setCoScorerForm(f => ({ ...f, label: e.target.value }))}
+                  className="h-8 w-36 text-sm"
+                />
+                {[['clock', 'Clock'], ['penalties', 'Penalties'], ['stats', 'Stats & timeouts']].map(([k, label]) => (
+                  <label key={k} className="flex items-center gap-1 text-sm cursor-pointer">
+                    <input type="checkbox" checked={coScorerForm.panels[k]} onChange={(e) => setCoScorerForm(f => ({ ...f, panels: { ...f.panels, [k]: e.target.checked } }))} />
+                    {label}
+                  </label>
+                ))}
+                <Button
+                  size="sm"
+                  className="h-8"
+                  disabled={!Object.values(coScorerForm.panels).some(Boolean)}
+                  onClick={async () => {
+                    const panels = Object.keys(coScorerForm.panels).filter(k => coScorerForm.panels[k])
+                    const link = await coScorerApi.create(game.share_code, panels, coScorerForm.label.trim() || 'Co-scorer').catch(() => null)
+                    if (link) setCoScorerLinks(prev => [...prev, link])
+                  }}
+                >
+                  + Create link
+                </Button>
+              </div>
+              {coScorerLinks.map(link => {
+                const url = `${window.location.origin}/coscore/${link.share_code}/${link.token}`
+                return (
+                  <div key={link.id} className="flex flex-wrap items-center gap-2 text-sm rounded border px-2 py-1.5">
+                    <span className="font-semibold">{link.label}</span>
+                    <span className="text-xs text-slate-500">{link.panels.join(', ')}</span>
+                    <Button size="sm" variant="outline" className="h-7 ml-auto" onClick={() => navigator.clipboard?.writeText(url).then(() => setRemoteNotice('Co-scorer link copied'), () => prompt('Copy this link:', url))}>Copy link</Button>
+                    <Button size="sm" variant="outline" className="h-7 text-red-600 border-red-300" onClick={async () => {
+                      if (!confirm(`Remove ${link.label}'s link? It stops working right away.`)) return
+                      await coScorerApi.remove(game.share_code, link.id).catch(() => {})
+                      setCoScorerLinks(prev => prev.filter(l => l.id !== link.id))
+                    }}>Remove</Button>
+                  </div>
+                )
+              })}
             </div>
 
             {/* Sponsors */}

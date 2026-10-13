@@ -20,7 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { leagueApi, teamApi, gameApi, bracketApi } from '@/lib/api'
+import { leagueApi, teamApi, gameApi, bracketApi, followApi, leagueExtrasApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
+import { requestNotificationPermission, subscribeToPush, getPushUnsupportedReason } from '@/lib/notifications'
 
 export default function TeamSchedulePage() {
   const { leagueId, teamId } = useParams()
@@ -32,6 +34,10 @@ export default function TeamSchedulePage() {
   const [seasons, setSeasons] = useState([])
   // Season shown: null follows the current season, 'all' shows every season
   const [scheduleSeasonId, setScheduleSeasonId] = useState(null)
+  const { user } = useAuth()
+  const [following, setFollowing] = useState(false)
+  const [teamStats, setTeamStats] = useState(null)
+  const [now, setNow] = useState(Date.now())
   const [loading, setLoading] = useState(true)
   
   // Dialog states
@@ -47,6 +53,39 @@ export default function TeamSchedulePage() {
   }, [leagueId, teamId])
 
   const [allTeams, setAllTeams] = useState([])
+
+  // Season stats for this team (from the league stats leaders)
+  useEffect(() => {
+    if (!leagueId) return
+    const season = scheduleSeasonId && scheduleSeasonId !== 'all' ? scheduleSeasonId : null
+    leagueExtrasApi.stats(leagueId, season).then(d => setTeamStats((d?.teams || []).find(t => t.team_id === teamId) || null)).catch(() => {})
+  }, [leagueId, teamId, scheduleSeasonId])
+
+  // Following this team (notifications for its games)
+  useEffect(() => {
+    if (!user) { setFollowing(false); return }
+    followApi.getAll().then(f => setFollowing((f || []).some(x => x.team_id === teamId))).catch(() => {})
+  }, [user, teamId])
+
+  async function toggleFollow() {
+    if (following) {
+      await followApi.unfollowTeam(teamId).catch(() => {})
+      setFollowing(false)
+      return
+    }
+    // Ask for notification permission while still handling the tap (iOS), then follow
+    const unsupported = getPushUnsupportedReason()
+    const permission = unsupported ? null : requestNotificationPermission()
+    await followApi.followTeam(teamId).catch(() => {})
+    setFollowing(true)
+    if (unsupported) alert('Following! ' + unsupported)
+    else if (await permission) subscribeToPush()
+  }
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
 
   async function loadData() {
     try {
@@ -202,6 +241,16 @@ export default function TeamSchedulePage() {
     return r
   }, { wins: 0, losses: 0, ties: 0 })
   const viewingCurrentSeason = currentSeason && effectiveSeasonId === currentSeason.id
+
+  // Next game, recent form (last 5 finals, no preseason), and season stats
+  const nextGame = scheduledGames.find(g => g.status === 'live') ||
+    scheduledGames.find(g => g.status === 'scheduled' && g.scheduled_at && new Date(g.scheduled_at) > new Date(now - 4 * 3600 * 1000))
+  const recentForm = scheduledGames.filter(g => g.status === 'final' && g.game_unit_type !== 3).slice(-5).map(g => {
+    const isHome = g.home_team?.id === teamId
+    const us = isHome ? g.home_score : g.away_score
+    const them = isHome ? g.away_score : g.home_score
+    return { id: g.id, result: us > them ? 'W' : us < them ? 'L' : 'T', score: `${us}-${them}` }
+  })
   const otherTeams = league?.teams?.filter(t => t.id !== teamId) || []
   const unlinkedBrackets = brackets.filter(b => !linkedBrackets.includes(b.id))
 
@@ -309,6 +358,15 @@ export default function TeamSchedulePage() {
               )}
             </div>
             <div className="flex flex-wrap gap-2">
+              {user && (
+                <Button variant={following ? 'default' : 'outline'} className={following ? 'bg-amber-500 hover:bg-amber-600' : ''} onClick={toggleFollow}>
+                  {following ? '🔔 Following' : '🔕 Follow team'}
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => {
+                const url = `${window.location.origin.replace(/^http/, 'webcal')}/api/calendar/team/${teamId}.ics`
+                navigator.clipboard?.writeText(url).then(() => alert('Calendar link copied. Add it in your calendar app as a subscription (from URL).'), () => prompt('Calendar subscription link:', url))
+              }}>📅 Calendar</Button>
               <Button onClick={() => setAddGameDialogOpen(true)} className="gap-2">
                 <Plus className="h-4 w-4" />
                 Add Game
@@ -321,6 +379,55 @@ export default function TeamSchedulePage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Next game, recent form, season stats */}
+      {(nextGame || recentForm.length > 0 || teamStats?.games > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {nextGame && (() => {
+            const isHome = nextGame.home_team?.id === teamId
+            const opp = isHome ? nextGame.away_team : nextGame.home_team
+            const diff = nextGame.scheduled_at ? new Date(nextGame.scheduled_at) - now : 0
+            const live = nextGame.status === 'live'
+            return (
+              <Card>
+                <CardContent className="py-4 space-y-1">
+                  <p className="text-xs font-semibold text-slate-500 uppercase">{live ? 'Playing now' : 'Next game'}</p>
+                  <p className="font-bold">{isHome ? 'vs' : '@'} {opp?.name || 'TBD'}</p>
+                  {live ? (
+                    <p className="text-red-600 font-bold">● {nextGame.away_score}-{nextGame.home_score} · {nextGame.quarter} {nextGame.game_time}</p>
+                  ) : diff > 0 ? (
+                    <p className="font-mono text-lg">{Math.floor(diff / 86400000) > 0 ? `${Math.floor(diff / 86400000)}d ` : ''}{String(Math.floor(diff / 3600000) % 24).padStart(2, '0')}:{String(Math.floor(diff / 60000) % 60).padStart(2, '0')}:{String(Math.floor(diff / 1000) % 60).padStart(2, '0')}</p>
+                  ) : <p className="text-sm text-slate-500">Starting soon</p>}
+                  <Link to={`/share/game/${nextGame.share_code}`} className="text-sm text-blue-600 hover:underline">{live ? 'Watch live' : 'Game page'} →</Link>
+                </CardContent>
+              </Card>
+            )
+          })()}
+          {recentForm.length > 0 && (
+            <Card>
+              <CardContent className="py-4 space-y-2">
+                <p className="text-xs font-semibold text-slate-500 uppercase">Last {recentForm.length}</p>
+                <div className="flex gap-1.5">
+                  {recentForm.map(r => (
+                    <span key={r.id} title={r.score} className={`h-8 w-8 rounded flex items-center justify-center text-sm font-black text-white ${r.result === 'W' ? 'bg-green-600' : r.result === 'L' ? 'bg-red-600' : 'bg-slate-500'}`}>{r.result}</span>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          {teamStats?.games > 0 && (
+            <Card>
+              <CardContent className="py-4 grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+                <p className="col-span-2 text-xs font-semibold text-slate-500 uppercase">Season stats</p>
+                <span className="text-slate-500">Points / game</span><span className="font-bold text-right">{teamStats.points_per_game}</span>
+                <span className="text-slate-500">Allowed / game</span><span className="font-bold text-right">{teamStats.points_allowed_per_game}</span>
+                {teamStats.third_down_pct != null && <><span className="text-slate-500">3rd down</span><span className="font-bold text-right">{teamStats.third_down_pct}%</span></>}
+                {teamStats.turnovers_per_game != null && <><span className="text-slate-500">Turnovers / game</span><span className="font-bold text-right">{teamStats.turnovers_per_game}</span></>}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Linked Brackets */}
       {linkedBrackets.length > 0 && (

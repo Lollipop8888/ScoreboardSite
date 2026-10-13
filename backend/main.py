@@ -2,6 +2,13 @@ import json
 import math
 import os
 import uuid
+import re
+import secrets
+import sqlite3
+import time
+import urllib.request
+from collections import deque
+from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 from typing import List, Dict, Set, Optional
 from contextlib import asynccontextmanager
@@ -9,7 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session, joinedload
 
 import models
@@ -1148,15 +1155,9 @@ async def update_game(
         home_team = db.query(models.Team).filter(models.Team.id == db_game.home_team_id).first()
         away_team = db.query(models.Team).filter(models.Team.id == db_game.away_team_id).first()
         if home_team and away_team:
-            notifications.notify_league_followers(
-                db, db_game.league_id,
-                "Game Started!",
-                f"{away_team.name} vs {home_team.name} is now live",
-                {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
-                notification_type="game_start"
-            )
-            notifications.notify_game_followers(
-                db, game_id,
+            # Everyone following this game, its league, or either team - once each
+            notifications.notify_game_audience(
+                db, db_game,
                 "Game Started!",
                 f"{away_team.name} vs {home_team.name} is now live",
                 {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
@@ -1182,15 +1183,8 @@ async def update_game(
             else:
                 body = f"It's a tie! Final: {away_team.name} {db_game.away_score} - {home_team.name} {db_game.home_score}"
             
-            notifications.notify_league_followers(
-                db, db_game.league_id,
-                "Game Ended",
-                body,
-                {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
-                notification_type="game_end"
-            )
-            notifications.notify_game_followers(
-                db, game_id,
+            notifications.notify_game_audience(
+                db, db_game,
                 "Game Ended",
                 body,
                 {"url": f"/share/game/{db_game.share_code}", "game_id": game_id},
@@ -2225,14 +2219,43 @@ async def delete_standalone_game(
 
 
 # ============ WebSocket Endpoints ============
+# Live chat and reactions on share pages: in memory only (nothing stored), per game room.
+# Chat is off until the game's owner turns it on; reactions are always on.
+chat_rooms: Dict[str, dict] = {}
+REACTIONS = {"🔥", "👏", "😱", "🏈", "🎉", "😤"}
+
+
+def chat_room(room: str) -> dict:
+    return chat_rooms.setdefault(room, {"enabled": False, "messages": deque(maxlen=50)})
+
+
 @app.websocket("/ws/game/{share_code}")
 async def game_websocket(websocket: WebSocket, share_code: str):
     room = f"game:{share_code.upper()}"
     await manager.connect(websocket, room)
+    state = chat_room(room)
+    await websocket.send_json({"type": "chat_state", "enabled": state["enabled"], "messages": list(state["messages"])})
+    last_chat = last_reaction = 0.0
     try:
         while True:
             data = await websocket.receive_text()
-            # Handle any client messages if needed
+            try:
+                msg = json.loads(data)
+            except ValueError:
+                continue
+            now = time.monotonic()
+            if msg.get("type") == "chat" and state["enabled"] and now - last_chat >= 2:
+                name = str(msg.get("name", "")).strip()[:24] or "Fan"
+                text = str(msg.get("text", "")).strip()[:200]
+                if not text:
+                    continue
+                last_chat = now
+                entry = {"id": uuid.uuid4().hex[:12], "name": name, "text": text, "at": datetime.utcnow().isoformat()}
+                state["messages"].append(entry)
+                await manager.broadcast(room, {"type": "chat", "message": entry})
+            elif msg.get("type") == "reaction" and msg.get("emoji") in REACTIONS and now - last_reaction >= 0.3:
+                last_reaction = now
+                await manager.broadcast(room, {"type": "reaction", "emoji": msg["emoji"]})
     except WebSocketDisconnect:
         manager.disconnect(websocket, room)
         await manager.broadcast_viewer_count(room)
@@ -2273,6 +2296,371 @@ async def league_websocket(websocket: WebSocket, share_code: str):
     except WebSocketDisconnect:
         manager.disconnect(websocket, room)
         await manager.broadcast_viewer_count(room)
+
+
+
+# ============ Shared helpers for game share codes ============
+def game_by_share_code(db: Session, share_code: str):
+    """The league game or standalone game with this share code, or 404."""
+    code = share_code.upper()
+    game = db.query(models.Game).filter(models.Game.share_code == code).first() or \
+        db.query(models.StandaloneGame).filter(models.StandaloneGame.share_code == code).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return game
+
+
+def check_game_owner(db: Session, game, current_user: Optional[models.User]):
+    if isinstance(game, models.Game):
+        check_league_ownership(db, game.league_id, current_user)
+    elif not current_user or (game.owner_id and game.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not your game")
+
+
+# ============ Live chat settings (owner) ============
+@app.get("/api/chat/{share_code}")
+def get_chat_settings(share_code: str):
+    return {"enabled": chat_room(f"game:{share_code.upper()}")["enabled"]}
+
+
+@app.post("/api/chat/{share_code}")
+async def update_chat_settings(
+    share_code: str,
+    settings: schemas.ChatSettings,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(auth.get_current_user)
+):
+    """Turn the share page chat on/off, or clear it (game owner only)."""
+    check_game_owner(db, game_by_share_code(db, share_code), current_user)
+    room = f"game:{share_code.upper()}"
+    state = chat_room(room)
+    if settings.enabled is not None:
+        state["enabled"] = settings.enabled
+    if settings.clear:
+        state["messages"].clear()
+    await manager.broadcast(room, {"type": "chat_state", "enabled": state["enabled"], "messages": list(state["messages"])})
+    return {"enabled": state["enabled"]}
+
+
+# ============ Co-scorer links ============
+COSCORER_PANELS = {"clock", "penalties", "stats"}
+# Which panel each remote action needs
+REMOTE_ACTION_PANELS = {
+    "clock_toggle": "clock", "clock_adjust": "clock",
+    "flag": "penalties", "flag_details": "penalties", "flag_apply": "penalties", "flag_decline": "penalties",
+    "flag_pickup": "penalties", "flag_offsetting": "penalties", "flag_replay": "penalties", "flag_cancel": "penalties",
+    "stat": "stats", "timeout": "stats",
+}
+
+
+def coscorer_link_out(link: models.CoScorerLink) -> dict:
+    return {"id": link.id, "token": link.token, "panels": json.loads(link.panels), "label": link.label,
+            "share_code": link.share_code, "created_at": link.created_at}
+
+
+@app.get("/api/coscorers/{share_code}")
+def list_coscorer_links(share_code: str, db: Session = Depends(get_db),
+                        current_user: Optional[models.User] = Depends(auth.get_current_user)):
+    check_game_owner(db, game_by_share_code(db, share_code), current_user)
+    links = db.query(models.CoScorerLink).filter(models.CoScorerLink.share_code == share_code.upper()).all()
+    return [coscorer_link_out(l) for l in links]
+
+
+@app.post("/api/coscorers/{share_code}")
+def create_coscorer_link(share_code: str, body: schemas.CoScorerLinkCreate, db: Session = Depends(get_db),
+                         current_user: Optional[models.User] = Depends(auth.get_current_user)):
+    """Create a private link for a helper who runs some panels (clock, penalties, stats)."""
+    check_game_owner(db, game_by_share_code(db, share_code), current_user)
+    panels = [p for p in body.panels if p in COSCORER_PANELS]
+    if not panels:
+        raise HTTPException(status_code=400, detail="Pick at least one panel")
+    link = models.CoScorerLink(share_code=share_code.upper(), token=secrets.token_urlsafe(24),
+                               panels=json.dumps(panels), label=(body.label or "Co-scorer")[:50])
+    db.add(link)
+    db.commit()
+    db.refresh(link)
+    return coscorer_link_out(link)
+
+
+@app.delete("/api/coscorers/{share_code}/{link_id}")
+def delete_coscorer_link(share_code: str, link_id: str, db: Session = Depends(get_db),
+                         current_user: Optional[models.User] = Depends(auth.get_current_user)):
+    check_game_owner(db, game_by_share_code(db, share_code), current_user)
+    db.query(models.CoScorerLink).filter(models.CoScorerLink.id == link_id,
+                                         models.CoScorerLink.share_code == share_code.upper()).delete()
+    db.commit()
+    return {"message": "Link removed"}
+
+
+def coscorer_link_for(db: Session, share_code: str, token: str) -> models.CoScorerLink:
+    link = db.query(models.CoScorerLink).filter(models.CoScorerLink.token == token,
+                                                models.CoScorerLink.share_code == share_code.upper()).first()
+    if not link:
+        raise HTTPException(status_code=403, detail="This co-scorer link isn't valid (it may have been removed)")
+    return link
+
+
+@app.get("/api/coscore/{share_code}/{token}")
+def get_coscorer_access(share_code: str, token: str, db: Session = Depends(get_db)):
+    link = coscorer_link_for(db, share_code, token)
+    return {"panels": json.loads(link.panels), "label": link.label, "share_code": link.share_code}
+
+
+@app.post("/api/coscore/{share_code}/{token}/action")
+async def coscorer_action(share_code: str, token: str, body: schemas.RemoteAction, db: Session = Depends(get_db)):
+    """Relay a co-scorer action to the game's scoring page, which applies it (it stays the source of truth)."""
+    link = coscorer_link_for(db, share_code, token)
+    panel = REMOTE_ACTION_PANELS.get(body.action)
+    if not panel or panel not in json.loads(link.panels):
+        raise HTTPException(status_code=403, detail="This link can't do that")
+    await manager.broadcast(f"game:{share_code.upper()}", {
+        "type": "remote_action", "data": {"action": body.action, "payload": body.payload, "from": link.label}
+    })
+    return {"ok": True}
+
+
+# ============ Calendar feeds (.ics) ============
+def _ics_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def games_calendar(name: str, games, base_url: str) -> Response:
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//GridIron Score//EN", "CALSCALE:GREGORIAN",
+             f"X-WR-CALNAME:{_ics_escape(name)}", "X-WR-TIMEZONE:America/New_York"]
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    for g in games:
+        if not g.scheduled_at or not g.home_team or not g.away_team:
+            continue
+        start = g.scheduled_at  # stored as Eastern wall-clock time
+        end = start + timedelta(hours=3, minutes=15)
+        title = f"{g.away_team.name} @ {g.home_team.name}"
+        if g.status == "final":
+            title += f" - Final {g.away_team.abbreviation} {g.away_score}, {g.home_team.abbreviation} {g.home_score}"
+        lines += ["BEGIN:VEVENT", f"UID:{g.id}@gridironscore.com", f"DTSTAMP:{stamp}",
+                  f"DTSTART;TZID=America/New_York:{start.strftime('%Y%m%dT%H%M%S')}",
+                  f"DTEND;TZID=America/New_York:{end.strftime('%Y%m%dT%H%M%S')}",
+                  f"SUMMARY:{_ics_escape(title)}",
+                  f"URL:{base_url}/share/game/{g.share_code}",
+                  f"DESCRIPTION:{_ics_escape(f'Watch live: {base_url}/share/game/{g.share_code}')}",
+                  "END:VEVENT"]
+    lines.append("END:VCALENDAR")
+    return Response("\r\n".join(lines) + "\r\n", media_type="text/calendar; charset=utf-8")
+
+
+def _base_url(request) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return f"{proto}://{request.headers.get('host', request.url.netloc)}"
+
+
+from fastapi import Request  # noqa: E402  (used by the calendar feeds)
+
+
+@app.get("/api/calendar/team/{team_id}.ics")
+def team_calendar(team_id: str, request: Request, db: Session = Depends(get_db)):
+    team = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    games = db.query(models.Game).options(joinedload(models.Game.home_team), joinedload(models.Game.away_team)).filter(
+        (models.Game.home_team_id == team_id) | (models.Game.away_team_id == team_id)).all()
+    return games_calendar(f"{team.name} schedule", games, _base_url(request))
+
+
+@app.get("/api/calendar/league/{league_id}.ics")
+def league_calendar(league_id: str, request: Request, db: Session = Depends(get_db)):
+    league = db.query(models.League).filter(models.League.id == league_id).first()
+    if not league:
+        raise HTTPException(status_code=404, detail="League not found")
+    games = db.query(models.Game).options(joinedload(models.Game.home_team), joinedload(models.Game.away_team)).filter(
+        models.Game.league_id == league_id).all()
+    return games_calendar(f"{league.name} schedule", games, _base_url(request))
+
+
+# ============ League stats leaders ============
+@app.get("/api/leagues/{league_id}/stats")
+def league_stats(league_id: str, season_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """Per-team stats for a season from its final games (preseason left out). Points come from every final
+    game; first downs, 3rd downs, turnovers, penalties and time of possession from games scored in the app."""
+    if not season_id:
+        current = db.query(models.Season).filter(models.Season.league_id == league_id, models.Season.is_current == True).first()
+        season_id = current.id if current else None
+    teams = db.query(models.Team).filter(models.Team.league_id == league_id).all()
+    rows = {t.id: {"team_id": t.id, "name": t.name, "abbreviation": t.abbreviation, "color": t.color, "logo_url": t.logo_url,
+                   "games": 0, "points_for": 0, "points_against": 0, "tracked_games": 0, "first_downs": 0,
+                   "third_conv": 0, "third_att": 0, "turnovers": 0, "penalty_yards": 0, "top_seconds": 0} for t in teams}
+    q = db.query(models.Game).filter(models.Game.league_id == league_id, models.Game.status == "final")
+    if season_id:
+        q = q.filter(models.Game.season_id == season_id)
+    for g in q.all():
+        if g.game_unit_type == 3 or g.home_team_id not in rows or g.away_team_id not in rows:
+            continue
+        try:
+            state = json.loads(g.display_state) if g.display_state else {}
+        except ValueError:
+            state = {}
+        qs = state.get("quickStats") or {}
+        top = state.get("timeOfPossession") or {}
+        for side, team_id, pf, pa in (("home", g.home_team_id, g.home_score, g.away_score), ("away", g.away_team_id, g.away_score, g.home_score)):
+            r = rows[team_id]
+            r["games"] += 1
+            r["points_for"] += pf or 0
+            r["points_against"] += pa or 0
+            st = qs.get(side)
+            if st:
+                r["tracked_games"] += 1
+                r["first_downs"] += st.get("firstDowns") or 0
+                r["third_conv"] += st.get("thirdDownConv") or 0
+                r["third_att"] += st.get("thirdDownAtt") or 0
+                r["turnovers"] += st.get("turnovers") or 0
+                r["penalty_yards"] += st.get("penaltyYards") or 0
+                r["top_seconds"] += top.get(side) or 0
+    out = []
+    for r in rows.values():
+        n, t = r["games"], r["tracked_games"]
+        r["points_per_game"] = round(r["points_for"] / n, 1) if n else None
+        r["points_allowed_per_game"] = round(r["points_against"] / n, 1) if n else None
+        r["first_downs_per_game"] = round(r["first_downs"] / t, 1) if t else None
+        r["third_down_pct"] = round(100 * r["third_conv"] / r["third_att"], 1) if r["third_att"] else None
+        r["turnovers_per_game"] = round(r["turnovers"] / t, 2) if t else None
+        r["penalty_yards_per_game"] = round(r["penalty_yards"] / t, 1) if t else None
+        r["top_per_game_seconds"] = round(r["top_seconds"] / t) if t else None
+        out.append(r)
+    return {"season_id": season_id, "teams": out}
+
+
+# ============ ESPN sync (NFL leagues) ============
+ESPN_ABBR = {"WSH": "WAS"}
+ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={year}&seasontype={stype}&week={week}"
+EASTERN = ZoneInfo("America/New_York")
+
+
+def espn_unit(stype: int, week: int):
+    """ESPN season type/week -> (game_unit_type, game_unit) as used in this app, or None to skip."""
+    if stype == 1:
+        return (3, week - 1)            # preseason: Hall of Fame game is week 0
+    if stype == 2:
+        return (1, week)
+    if stype == 3:
+        return None if week == 4 else (2, 4 if week == 5 else week)  # week 4 is the Pro Bowl; 5 the Super Bowl
+    return None
+
+
+def fetch_espn_season(year: int):
+    events = []
+    for stype, weeks in ((1, range(1, 5)), (2, range(1, 19)), (3, range(1, 6))):
+        for week in weeks:
+            try:
+                with urllib.request.urlopen(ESPN_URL.format(year=year, stype=stype, week=week), timeout=15) as r:
+                    data = json.load(r)
+            except Exception as e:
+                print(f"[ESPN] {stype}/{week} failed: {e}")
+                continue
+            for e in data.get("events", []):
+                events.append((stype, week, e))
+    return events
+
+
+@app.post("/api/leagues/{league_id}/sync-espn")
+def sync_espn(league_id: str, body: schemas.EspnSyncRequest, db: Session = Depends(get_db),
+              current_user: Optional[models.User] = Depends(auth.get_current_user)):
+    """Fill in an NFL season from ESPN: final scores for games not being scored here, kickoff time changes,
+    and games that aren't in the season yet (e.g. playoffs). Games in progress here and finals that already
+    exist are never changed. dry_run lists the changes; applying backs up the database first."""
+    check_league_ownership(db, league_id, current_user)
+    season = db.query(models.Season).filter(models.Season.id == body.season_id).first() if body.season_id else \
+        db.query(models.Season).filter(models.Season.league_id == league_id, models.Season.is_current == True).first()
+    if not season or season.league_id != league_id:
+        raise HTTPException(status_code=400, detail="No season to sync")
+    m = re.search(r"(20\d\d)", season.name or "")
+    year = int(m.group(1)) if m else datetime.now().year
+    teams = {t.abbreviation: t for t in db.query(models.Team).filter(models.Team.league_id == league_id).all() if t.abbreviation}
+    games = db.query(models.Game).filter(models.Game.season_id == season.id).all()
+
+    changes = {"finals": [], "new_games": [], "time_changes": [], "skipped_live": [], "mismatches": [], "unknown_teams": set()}
+    actions = []
+    for stype, week, e in fetch_espn_season(year):
+        unit = espn_unit(stype, week)
+        if not unit:
+            continue
+        comp = e["competitions"][0]
+        side = {c["homeAway"]: c for c in comp["competitors"]}
+        ha = ESPN_ABBR.get(side["home"]["team"]["abbreviation"], side["home"]["team"]["abbreviation"])
+        aa = ESPN_ABBR.get(side["away"]["team"]["abbreviation"], side["away"]["team"]["abbreviation"])
+        if ha not in teams or aa not in teams:
+            # TBD = playoff games ESPN hasn't set yet
+            changes["unknown_teams"].update(x for x in (ha, aa) if x not in teams and x != "TBD")
+            continue
+        home, away = teams[ha], teams[aa]
+        kickoff = datetime.strptime(e["date"], "%Y-%m-%dT%H:%MZ").replace(tzinfo=ZoneInfo("UTC")).astimezone(EASTERN).replace(tzinfo=None)
+        final = e["status"]["type"]["name"] == "STATUS_FINAL"
+        hs, as_ = (int(side["home"].get("score") or 0), int(side["away"].get("score") or 0)) if final else (0, 0)
+        label = f"{aa} @ {ha} ({kickoff:%b %d})"
+        match = next((g for g in games if {g.home_team_id, g.away_team_id} == {home.id, away.id}
+                      and g.scheduled_at and abs((g.scheduled_at - kickoff).total_seconds()) <= 36 * 3600), None)
+        if match is None:
+            changes["new_games"].append(label + (f" final {aa} {as_}, {ha} {hs}" if final else ""))
+            actions.append(("new", dict(home=home, away=away, kickoff=kickoff, final=final, hs=hs, as_=as_, unit=unit)))
+            continue
+        if match.status == "live":
+            if final:
+                changes["skipped_live"].append(label)
+            continue
+        if final:
+            # ESPN's home team may be the other side of the game here
+            mhs, mas = (hs, as_) if match.home_team_id == home.id else (as_, hs)
+            if match.status == "final":
+                if (match.home_score, match.away_score) != (mhs, mas):
+                    changes["mismatches"].append(f"{label}: here {match.away_score}-{match.home_score}, ESPN {mas}-{mhs}")
+                continue
+            changes["finals"].append(f"{label} final {aa} {as_}, {ha} {hs}")
+            actions.append(("final", dict(game=match, hs=mhs, as_=mas)))
+        elif match.status == "scheduled" and abs((match.scheduled_at - kickoff).total_seconds()) >= 60:
+            changes["time_changes"].append(f"{label}: {match.scheduled_at:%a %I:%M %p} -> {kickoff:%a %I:%M %p}")
+            actions.append(("time", dict(game=match, kickoff=kickoff)))
+
+    changes["unknown_teams"] = sorted(changes["unknown_teams"])
+    summary = {k: v for k, v in changes.items()}
+    summary["season"] = season.name
+    if body.dry_run or not actions:
+        summary["applied"] = False
+        return summary
+
+    # Back up the database before changing it
+    db_path = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scoreboard.db"))
+    backup_dir = os.path.join(os.path.dirname(db_path), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    backup_path = os.path.join(backup_dir, f"scoreboard.db.backup_{datetime.now():%Y%m%d_%H%M%S}_before_espn_sync")
+    src = sqlite3.connect(db_path)
+    dst = sqlite3.connect(backup_path)
+    with dst:
+        src.backup(dst)
+    src.close()
+    dst.close()
+
+    used_codes = {c for (c,) in db.query(models.Game.share_code).all()}
+    for kind, a in actions:
+        if kind == "final":
+            g = a["game"]
+            g.home_score, g.away_score, g.status, g.quarter, g.game_time = a["hs"], a["as_"], "final", "Final", "0:00"
+        elif kind == "time":
+            a["game"].scheduled_at = a["kickoff"]
+        else:
+            code = uuid.uuid4().hex[:8].upper()
+            while code in used_codes:
+                code = uuid.uuid4().hex[:8].upper()
+            used_codes.add(code)
+            db.add(models.Game(
+                league_id=league_id, season_id=season.id, home_team_id=a["home"].id, away_team_id=a["away"].id,
+                home_score=a["hs"], away_score=a["as_"], status="final" if a["final"] else "scheduled",
+                quarter="Final" if a["final"] else None, game_time="0:00" if a["final"] else None,
+                scheduled_at=a["kickoff"], share_code=code, game_unit_type=a["unit"][0], game_unit=a["unit"][1],
+            ))
+    db.commit()
+    recompute_season_stats(db, season.id)
+    recompute_team_records(db, league_id)
+    db.commit()
+    summary["applied"] = True
+    summary["backup"] = os.path.basename(backup_path)
+    return summary
 
 
 # ============ Invite Endpoints ============
@@ -2414,7 +2802,8 @@ async def create_follow(
     existing = db.query(models.UserFollow).filter(
         models.UserFollow.user_id == current_user.id,
         models.UserFollow.league_id == follow.league_id,
-        models.UserFollow.game_id == follow.game_id
+        models.UserFollow.game_id == follow.game_id,
+        models.UserFollow.team_id == follow.team_id
     ).first()
     if existing:
         return existing
@@ -2422,7 +2811,8 @@ async def create_follow(
     db_follow = models.UserFollow(
         user_id=current_user.id,
         league_id=follow.league_id,
-        game_id=follow.game_id
+        game_id=follow.game_id,
+        team_id=follow.team_id
     )
     db.add(db_follow)
     db.commit()
@@ -2445,6 +2835,20 @@ async def delete_follow(
         raise HTTPException(status_code=404, detail="Follow not found")
     
     db.delete(follow)
+    db.commit()
+    return {"message": "Unfollowed"}
+
+
+@app.delete("/api/follows/team/{team_id}")
+async def unfollow_team(
+    team_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user_required)
+):
+    """Unfollow a team"""
+    db.query(models.UserFollow).filter(
+        models.UserFollow.user_id == current_user.id, models.UserFollow.team_id == team_id
+    ).delete()
     db.commit()
     return {"message": "Unfollowed"}
 

@@ -389,6 +389,16 @@
   100% { transform: translate(-50%, -76px) scale(0.5) rotate(-360deg); opacity: 0; }
 }
 
+@keyframes float-up {
+  0% { transform: translateY(0) scale(0.8); opacity: 0; }
+  10% { opacity: 1; }
+  100% { transform: translateY(-70vh) scale(1.2); opacity: 0; }
+}
+
+.animate-float-up {
+  animation: float-up 2.5s ease-out forwards;
+}
+
 @keyframes lead-glow {
   0%, 100% { box-shadow: 0 0 0 0 transparent; }
   50% { box-shadow: 0 0 28px 6px var(--glow); }
