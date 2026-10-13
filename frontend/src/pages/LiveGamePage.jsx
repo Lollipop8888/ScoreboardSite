@@ -250,6 +250,8 @@ export default function LiveGamePage({ standalone = false }) {
   const [showOTEndPrompt, setShowOTEndPrompt] = useState(false)
   // Overtime rules panel on the scoreboard: shown when OT starts, hidden when the clock starts
   const [showOTRules, setShowOTRules] = useState(false)
+  // Quarter whose clock hit 0:00 while a play may still be running; its end waits for the play
+  const [periodEndPending, setPeriodEndPending] = useState(null)
   // Immediate Actions boxes closed with their X; they come back when the situation changes
   const [dismissedBoxes, setDismissedBoxes] = useState([])
   const dismissBox = (id) => setDismissedBoxes(prev => [...prev, id])
@@ -952,6 +954,36 @@ export default function LiveGamePage({ standalone = false }) {
   // Closed Immediate Actions boxes reappear on the next down, possession, quarter or status change
   useEffect(() => { setDismissedBoxes([]) }, [down, possession, game?.quarter, gameStatus])
 
+  // End of a quarter, half, or the game once the clock has hit 0:00 and the last play is over
+  function endPeriod() {
+    const quarter = periodEndPending
+    setPeriodEndPending(null)
+    if (quarter === 'Q4' && game.home_score !== game.away_score) {
+      finalizeGame()
+    } else {
+      setGameStatus('end-quarter')
+    }
+  }
+
+  // The last play is over once something about it has been entered (down & distance, possession,
+  // score, or a game log entry such as a first down, turnover, penalty or missed kick) and nothing
+  // is still in progress (TD/PAT, FG, kick, turnover review, flag).
+  const periodEndSnapRef = useRef(null)
+  const playSignals = JSON.stringify([down, distance, possession, game?.home_score, game?.away_score, gameLog.length])
+  useEffect(() => {
+    if (!periodEndPending) { periodEndSnapRef.current = null; return }
+    // Clock put back on, or the quarter changed by hand: nothing to wait for
+    if (game?.quarter !== periodEndPending || (game?.game_time && game.game_time !== '0:00')) {
+      setPeriodEndPending(null)
+      return
+    }
+    if (periodEndSnapRef.current === null) { periodEndSnapRef.current = playSignals; return }
+    const playInProgress = showTDPanel || pendingPAT || showPATAttempt || showFGAttempt || scoreCelebration ||
+      pendingTurnoverReview || pendingFumble || showTurnoverOnDownsConfirm || flagDisplayStage > 0 ||
+      ['kickoff', 'onside-kick', 'punt', 'fg-setup'].includes(gameStatus)
+    if (playSignals !== periodEndSnapRef.current && !playInProgress) endPeriod()
+  }, [periodEndPending, playSignals, game?.quarter, game?.game_time, showTDPanel, pendingPAT, showPATAttempt, showFGAttempt, scoreCelebration, pendingTurnoverReview, pendingFumble, showTurnoverOnDownsConfirm, flagDisplayStage, gameStatus])
+
   // Down & distance from before the last first down (see recordPlayResult / applyPenalty)
   const firstDownUndoRef = useRef(null)
   // When the current flag was thrown. A flag within FIRST_DOWN_FLAG_WINDOW_MS of a first down is on
@@ -1524,11 +1556,13 @@ export default function LiveGamePage({ standalone = false }) {
   }
 
   // Helper to finalize game and sync bracket
-  // End the game. `scores` lets Quick Finish set the final score at the same time.
-  async function finalizeGame(scores = {}) {
-    const homeScore = scores.home_score ?? game.home_score
-    const awayScore = scores.away_score ?? game.away_score
-    await updateGame({ ...scores, quarter: 'Final', status: 'final' })
+  // End the game: status final, so it counts in standings. `overrides` can set the final score
+  // (Quick Finish) or the quarter label ('Final/T' for a tie).
+  async function finalizeGame(overrides = {}) {
+    const homeScore = overrides.home_score ?? game.home_score
+    const awayScore = overrides.away_score ?? game.away_score
+    setPeriodEndPending(null)
+    await updateGame({ quarter: 'Final', ...overrides, status: 'final' })
     setGameStatus('final')
     setPossession(null)
     setHideDownDistance(true)
@@ -1724,25 +1758,13 @@ export default function LiveGamePage({ standalone = false }) {
     // Update local state only (backend calculates from timer_started_at)
     setGame(prev => prev ? { ...prev, game_time: newTime } : prev)
     
-    // Handle end of clock
+    // Handle end of clock: the play that's running still finishes, so the end of the
+    // quarter/half/game waits for it (see periodEndPending)
     if (newSeconds <= 0) {
       timerRunningRef.current = false
       setTimerRunning(false)
       api.update(gameId, { game_time: '0:00', timer_running: false }).catch(() => {})
-      if (['Q1', 'Q2', 'Q3'].includes(currentGame.quarter)) {
-        setGameStatus('end-quarter')
-      } else if (currentGame.quarter === 'Q4') {
-        if (currentGame.home_score === currentGame.away_score) {
-          setGameStatus('end-quarter')
-        } else {
-          api.update(gameId, { quarter: 'Final' }).catch(() => {})
-          setGameStatus('final')
-          setPossession(null)
-          setHideDownDistance(true)
-        }
-      } else if (currentGame.quarter === 'OT' || currentGame.quarter?.startsWith('OT')) {
-        setGameStatus('end-quarter')
-      }
+      setPeriodEndPending(currentGame.quarter)
       return
     }
     
@@ -4328,6 +4350,18 @@ export default function LiveGamePage({ standalone = false }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Clock hit 0:00 - the end of the period waits for the current play */}
+            {periodEndPending && (
+              <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-lg space-y-2">
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  ⏱️ 0:00 - {periodEndPending === 'Q4' ? (game.home_score === game.away_score ? 'end of regulation' : 'game ends') : periodEndPending === 'Q2' ? 'halftime' : `end of ${periodEndPending}`} after this play
+                </p>
+                <p className="text-xs text-slate-500">Enter the play's result as usual. If no play is running, end it now.</p>
+                <Button size="sm" className="w-full bg-slate-700 hover:bg-slate-800 text-white" onClick={endPeriod}>
+                  End {periodEndPending} Now
+                </Button>
+              </div>
+            )}
             {/* Overtime Rules - available in Q4 (in case it ends tied) and during OT */}
             {(game.quarter === 'Q4' || game.quarter?.startsWith('OT')) && (() => {
               const rules = getOvertimeRules(game.ot_format, game.overtime_length)
@@ -4808,10 +4842,7 @@ export default function LiveGamePage({ standalone = false }) {
                     className="bg-green-600 hover:bg-green-700"
                     onClick={() => {
                       setShowOTEndPrompt(false)
-                      updateGame({ quarter: 'Final' })
-                      setGameStatus('final')
-                      setPossession(null)
-                      setHideDownDistance(true)
+                      finalizeGame()
                     }}
                   >
                     🏁 End Game
@@ -5562,12 +5593,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <div className="grid grid-cols-2 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
-                    onClick={() => {
-                      updateGame({ quarter: 'Final' })
-                      setGameStatus('final')
-                      setPossession(null)
-                      setHideDownDistance(true)
-                    }}
+                    onClick={() => finalizeGame()}
                   >
                     🏁 End Game
                   </Button>
@@ -5596,24 +5622,14 @@ export default function LiveGamePage({ standalone = false }) {
                 <div className="grid grid-cols-3 gap-2">
                   <Button 
                     className="bg-green-600 hover:bg-green-700"
-                    onClick={() => {
-                      updateGame({ quarter: 'Final' })
-                      setGameStatus('final')
-                      setPossession(null)
-                      setHideDownDistance(true)
-                    }}
+                    onClick={() => finalizeGame()}
                   >
                     🏁 End Game
                   </Button>
                   {game.home_score === game.away_score && (
                     <Button 
                       className="bg-slate-600 hover:bg-slate-700"
-                      onClick={() => {
-                        updateGame({ quarter: 'Final/T' })
-                        setGameStatus('final')
-                        setPossession(null)
-                        setHideDownDistance(true)
-                      }}
+                      onClick={() => finalizeGame({ quarter: 'Final/T' })}
                     >
                       🤝 End as Tie
                     </Button>
@@ -5643,12 +5659,7 @@ export default function LiveGamePage({ standalone = false }) {
                 <div className="grid grid-cols-2 gap-2 mb-2">
                   <Button 
                     className="bg-slate-600 hover:bg-slate-700"
-                    onClick={() => {
-                      updateGame({ quarter: 'Final/T' })
-                      setGameStatus('final')
-                      setPossession(null)
-                      setHideDownDistance(true)
-                    }}
+                    onClick={() => finalizeGame({ quarter: 'Final/T' })}
                   >
                     🤝 End as Tie
                   </Button>
@@ -7055,11 +7066,11 @@ export default function LiveGamePage({ standalone = false }) {
                 className={`w-full ${gameStatus === 'final' ? 'bg-amber-600 hover:bg-amber-700' : 'border-amber-400 text-amber-700 hover:bg-amber-50'}`}
                 onClick={() => {
                   if (gameStatus === 'final') {
+                    // Un-finalize: the game no longer counts in standings
                     setGameStatus(null)
+                    updateGame({ status: 'live' })
                   } else {
-                    setGameStatus('final')
-                    setPossession(null)
-                    setHideDownDistance(true)
+                    finalizeGame()
                   }
                 }}
               >
